@@ -1,0 +1,57 @@
+# Host-level nginx virtual host for Demscore
+#
+# This file belongs in /etc/nginx/sites-available/ on the production server.
+# Enable it with:  ln -s /etc/nginx/sites-available/demscore /etc/nginx/sites-enabled/
+# Then:           nginx -t && systemctl reload nginx
+#
+# Prerequisites:
+#   - TLS certificate (e.g. via certbot/Let's Encrypt)
+#   - Demscore containers running (./scripts/dev_up.sh)
+#   - Router container exposed on port 8090 (the only exposed port)
+#
+# All traffic — including /api/* and /mapserver/* — must go through the
+# Demscore router container (port 8090).  Do NOT add separate location blocks
+# for /api or /mapserver pointing to internal container ports; those internal
+# ports are not exposed and routing around the router causes port numbers to
+# appear in browser URLs via redirect Location headers.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name demscore.example.humlab.umu.se;
+
+    # Redirect all HTTP to HTTPS
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name demscore.example.humlab.umu.se;
+
+    # --- TLS (adjust paths to your certificate) ---
+    ssl_certificate     /etc/letsencrypt/live/demscore.example.humlab.umu.se/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/demscore.example.humlab.umu.se/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # --- Forward everything to the Demscore router ---
+    # The router handles /api, /mapserver, and / internally.
+    # Never add separate location blocks here for those paths.
+    location / {
+        proxy_pass       http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For  $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection        "";
+
+        # Rewrite any Location headers the upstream returns so that
+        # internal container ports never appear in browser URLs.
+        proxy_redirect http://127.0.0.1:8090/ https://$host/;
+
+        # Increase timeouts for slow WMS tile renders
+        proxy_read_timeout 120s;
+        proxy_send_timeout 120s;
+    }
+}
