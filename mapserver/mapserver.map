@@ -1,0 +1,130 @@
+MAP
+  NAME "demscore"
+  STATUS ON
+  IMAGETYPE PNG
+  SIZE 1200 700
+  EXTENT -180 -85 180 85
+  UNITS DD
+  MAXSIZE 10000
+
+  PROJECTION
+    "init=epsg:4326"
+  END
+
+  WEB
+    METADATA
+      "ows_enable_request" "*"
+      "wms_title" "Demscore Hexagons"
+      "wms_abstract" "Hexagon thematic map from Demscore variables in PostGIS"
+      "wms_onlineresource" "http://localhost:8088/?map=/etc/mapserver/mapserver.map"
+      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_allow_getmap_without_styles" "true"
+      "wms_feature_info_mime_type" "text/plain"
+      "wms_keywordlist" "demscore,hexagons,postgis"
+    END
+  END
+
+  LAYER
+    NAME "hex_variable"
+    TYPE POLYGON
+    STATUS ON
+    EXTENT -20037508.34 -20037508.34 20037508.34 20037508.34
+    CONNECTIONTYPE POSTGIS
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
+    PROCESSING "CLOSE_CONNECTION=DEFER"
+
+    METADATA
+      "wms_title" "Dataset Variable Hexagons"
+      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_include_items" "all"
+      "gml_include_items" "all"
+    END
+
+    VALIDATION
+      "dataset" "^(qog|repdem|v_dem)$"
+      "variable" "^[A-Za-z0-9_]+$"
+      "year" "^[0-9]{4}$"
+      "hex_size" "^[0-9]{5,7}$"
+      "polarity" "^(positive|negative)$"
+      "default_dataset" "v_dem"
+      "default_variable" "v2x_polyarchy"
+      "default_year" "2020"
+      "default_hex_size" "200000"
+      "default_polarity" "negative"
+    END
+
+    CLASS
+      NAME "1"
+      EXPRESSION ([class_idx] = 1)
+      STYLE
+        COLOR 49 54 149
+        OUTLINECOLOR 255 255 255
+        WIDTH 0.25
+      END
+    END
+
+    CLASS
+      NAME "2"
+      EXPRESSION ([class_idx] = 2)
+      STYLE
+        COLOR 69 117 180
+        OUTLINECOLOR 255 255 255
+        WIDTH 0.25
+      END
+    END
+
+    CLASS
+      NAME "3"
+      EXPRESSION ([class_idx] = 3)
+      STYLE
+        COLOR 116 173 209
+        OUTLINECOLOR 255 255 255
+        WIDTH 0.25
+      END
+    END
+
+    CLASS
+      NAME "4"
+      EXPRESSION ([class_idx] = 4)
+      STYLE
+        COLOR 171 217 233
+        OUTLINECOLOR 255 255 255
+        WIDTH 0.25
+      END
+    END
+
+    CLASS
+      NAME "5"
+      EXPRESSION ([class_idx] = 5)
+      STYLE
+        COLOR 253 174 97
+        OUTLINECOLOR 255 255 255
+        WIDTH 0.25
+      END
+    END
+
+    CLASS
+      NAME "6"
+      EXPRESSION ([class_idx] = 6)
+      STYLE
+        COLOR 244 109 67
+        OUTLINECOLOR 255 255 255
+        WIDTH 0.25
+      END
+    END
+
+    CLASS
+      NAME "7"
+      EXPRESSION ([class_idx] = 7)
+      STYLE
+        COLOR 215 48 39
+        OUTLINECOLOR 255 255 255
+        WIDTH 0.25
+      END
+    END
+  END
+END

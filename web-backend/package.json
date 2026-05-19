@@ -1,0 +1,15 @@
+{
+  "name": "demscore-web-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lightweight API backend for Demscore webapp",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.3"
+  }
+}
