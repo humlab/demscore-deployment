@@ -92,6 +92,17 @@ services:
       - mapcache_data:/var/cache/nginx
     restart: unless-stopped
 
+  gdal:
+    image: ghcr.io/osgeo/gdal:ubuntu-small-latest
+    profiles: ["setup"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD:-demscore}
+    volumes:
+      - ./data/reference:/data:ro
+
 volumes:
   pg_data:
   mapcache_data:

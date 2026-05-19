@@ -43,7 +43,7 @@ set_env_var() {
 
 check_deps() {
   local missing=()
-  for cmd in podman ogr2ogr curl; do
+  for cmd in podman curl; do
     if ! command -v "$cmd" &>/dev/null; then
       missing+=("$cmd")
     fi

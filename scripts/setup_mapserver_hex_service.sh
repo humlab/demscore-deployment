@@ -10,12 +10,6 @@ PG_HOST="${PG_HOST:-127.0.0.1}"
 PG_PORT="${PG_PORT:-5532}"
 PG_DB="${PG_DB:-demscore}"
 PG_USER="${PG_USER:-demscore}"
-PG_PASSWORD="${PG_PASSWORD:-demscore}"
-
-if ! command -v ogr2ogr >/dev/null 2>&1; then
-  echo "ogr2ogr is required but not found on PATH." >&2
-  exit 1
-fi
 
 if [[ ! -f "$COUNTRIES_FILE" ]]; then
   echo "Country geometry file not found. Downloading to ${COUNTRIES_FILE}..."
@@ -40,11 +34,10 @@ if ! podman compose exec -T db pg_isready -U "$PG_USER" -d "$PG_DB" >/dev/null 2
 fi
 
 echo "Importing country boundaries into PostGIS..."
-export PGPASSWORD="$PG_PASSWORD"
-ogr2ogr \
+podman compose --profile setup run --rm gdal ogr2ogr \
   -f PostgreSQL \
-  "PG:host=${PG_HOST} port=${PG_PORT} dbname=${PG_DB} user=${PG_USER} password=${PG_PASSWORD}" \
-  "$COUNTRIES_FILE" \
+  "PG:host=db port=5432 dbname=${PG_DB} user=${PG_USER}" \
+  /data/ne_110m_admin_0_countries.geojson \
   -nln demscore.countries_src \
   -overwrite \
   -nlt PROMOTE_TO_MULTI \
