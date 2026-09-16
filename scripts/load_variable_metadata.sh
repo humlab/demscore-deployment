@@ -563,6 +563,107 @@ ON CONFLICT (variable_id) DO UPDATE SET
   matched_by = EXCLUDED.matched_by,
   updated_at = now();
 
+-- Fourth pass: a few data columns are named with the codebook's *original* tag
+-- instead of its long tag (bti_su for qog_std_ts_bti_su, parl_polar_ches for
+-- repdem_basic_parl_polar_ches), so no earlier pass matches them. Only original
+-- tags that identify a single codebook block in the dataset qualify: QoG
+-- documents most indicators once per unit, so short tags like fh_rol belong to
+-- both qog_std_ts_fh_rol and qog_oecd_ts_fh_rol and must not be matched blind.
+WITH raw_dedup AS (
+  SELECT DISTINCT ON (dataset, long_tag, COALESCE(original_tag, ''))
+    dataset,
+    source_pdf,
+    NULLIF(dataset_tag, '') AS dataset_tag,
+    NULLIF(heading_raw, '') AS heading_raw,
+    NULLIF(title, '') AS title,
+    long_tag,
+    NULLIF(original_tag, '') AS original_tag,
+    NULLIF(dataset_citation, '') AS dataset_citation,
+    NULLIF(variable_citation, '') AS variable_citation,
+    NULLIF(description, '') AS description,
+    NULLIF(description_full, '') AS description_full,
+    NULLIF(raw_block_text, '') AS raw_block_text,
+    NULLIF(additional_versions, '') AS additional_versions,
+    NULLIF(question, '') AS question,
+    NULLIF(clarification, '') AS clarification,
+    NULLIF(scale, '') AS scale,
+    NULLIF(sources, '') AS sources,
+    NULLIF(data_release, '') AS data_release,
+    NULLIF(aggregation, '') AS aggregation,
+    NULLIF(cross_coder_aggregation, '') AS cross_coder_aggregation,
+    NULLIF(country_year_aggregation, '') AS country_year_aggregation
+  FROM demscore.variable_metadata_raw
+  WHERE NULLIF(long_tag, '') IS NOT NULL
+  ORDER BY dataset, long_tag, COALESCE(original_tag, ''), length(COALESCE(description, '')) DESC
+),
+unambiguous_original_tags AS (
+  SELECT dataset, original_tag
+  FROM raw_dedup
+  WHERE original_tag IS NOT NULL
+  GROUP BY dataset, original_tag
+  HAVING count(DISTINCT long_tag) = 1
+)
+INSERT INTO demscore.variable_metadata (
+  variable_id,
+  dataset,
+  variable,
+  source_long_tag,
+  source_pdf,
+  dataset_tag,
+  heading_raw,
+  original_tag,
+  title,
+  dataset_citation,
+  variable_citation,
+  description,
+  description_full,
+  raw_block_text,
+  additional_versions,
+  question,
+  clarification,
+  scale,
+  sources,
+  data_release,
+  aggregation,
+  cross_coder_aggregation,
+  country_year_aggregation,
+  matched_by
+)
+SELECT
+  v.id,
+  v.dataset,
+  v.variable,
+  rd.long_tag,
+  rd.source_pdf,
+  rd.dataset_tag,
+  rd.heading_raw,
+  rd.original_tag,
+  COALESCE(rd.title, rd.original_tag, rd.long_tag),
+  rd.dataset_citation,
+  rd.variable_citation,
+  rd.description,
+  rd.description_full,
+  rd.raw_block_text,
+  rd.additional_versions,
+  rd.question,
+  rd.clarification,
+  rd.scale,
+  rd.sources,
+  rd.data_release,
+  rd.aggregation,
+  rd.cross_coder_aggregation,
+  rd.country_year_aggregation,
+  'original_tag'
+FROM raw_dedup rd
+JOIN unambiguous_original_tags uo
+  ON uo.dataset = rd.dataset
+ AND uo.original_tag = rd.original_tag
+JOIN demscore.variables v
+  ON v.dataset = rd.dataset
+ AND v.variable = rd.original_tag
+-- Runs last, so an earlier, more specific match always wins.
+ON CONFLICT (variable_id) DO NOTHING;
+
 ANALYZE demscore.variable_metadata;
 
 COMMIT;

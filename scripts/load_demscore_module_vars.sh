@@ -126,10 +126,29 @@ SQL
     echo ");"
     echo "COPY demscore.${stage_name} FROM '/datasets/${dataset}/data.csv' WITH (FORMAT csv, HEADER true);"
 
-    excluded_cols=("$country_col" "$year_col")
+    # Demscore prefixes every unit/identifier column with `u_` (country name,
+    # year, and the various country code systems). Excluding only the three the
+    # load reads by name let the rest — e.g. u_vdem_country_year_country_id —
+    # melt into demscore.variables as if they were indicators: numeric, so they
+    # carry values and map, but with no codebook entry, so the web client can
+    # only show their raw key. Drop the whole prefix instead.
+    excluded_cols=()
+    for col in "${columns[@]}"; do
+      if [[ "$col" == u_* ]]; then
+        excluded_cols+=("$col")
+      fi
+    done
+
+    for required_col in "$country_col" "$year_col" ${iso_col:+"$iso_col"}; do
+      if [[ ! " ${excluded_cols[*]} " == *" ${required_col} "* ]]; then
+        echo "Column ${required_col} is missing from ${csv_path}" >&2
+        exit 1
+      fi
+    done
+    echo "${dataset}: excluding ${#excluded_cols[@]} identifier columns: ${excluded_cols[*]}" >&2
+
     year_expr="CASE WHEN NULLIF(TRIM(s.\"${year_col}\"), '') ~ '^[0-9]{1,4}$' THEN NULLIF(TRIM(s.\"${year_col}\"), '')::INT ELSE NULL END"
     if [[ -n "$iso_col" ]]; then
-      excluded_cols+=("$iso_col")
       iso_expr="NULLIF(TRIM(s.\"${iso_col}\"), '')"
     else
       iso_expr="NULL::TEXT"

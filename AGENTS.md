@@ -19,11 +19,23 @@ The system turns tabular democracy indicator data into a thematic global hex map
 2. `scripts/load_demscore_module_vars.sh` loads CSVs into a typed long-format model:
    - `demscore.variables` (`dataset`, `variable`)
    - `demscore.dataset_values` (`variable_id`, `year`, `iso3`, `country_name`, `value`, `country_id`)
+   - every `u_`-prefixed CSV column is an identifier (country, year, and the various country
+     code systems), not an indicator, and is excluded from the melt; excluding only the three
+     read by name once let `u_vdem_country_year_country_id` and friends become variables
 3. `scripts/load_variable_metadata.sh` enriches variables with codebook metadata:
    - converts each dataset `codebook.pdf` to text (`pdftotext -layout`)
    - parses entries using `scripts/extract_variable_metadata.py`
    - loads parsed rows into `demscore.variable_metadata_raw`
-   - resolves matches to `demscore.variables` and stores final metadata in `demscore.variable_metadata`
+   - resolves matches to `demscore.variables` and stores final metadata in `demscore.variable_metadata`,
+     in four passes recorded in `matched_by`, each declining to overwrite an earlier one:
+     `direct` (data column = codebook long tag), `vdem_prefix` (long tag minus `vdem_cy_`),
+     `vdem_additional_versions[_combo]` (V-Dem `_codelow`/`_codehigh`/`_sd` variants expanded
+     from `ADDITIONAL VERSIONS`), and `original_tag` (data column = the codebook's *original*
+     short tag, e.g. `bti_su` for `qog_std_ts_bti_su`) — the last is restricted to short tags
+     naming exactly one block per dataset, since QoG documents most indicators once per unit
+     and shares short tags like `fh_rol` between `qog_std_ts_*` and `qog_oecd_ts_*`
+   - a clean run ends with `unmatched_rows = 0`; anything else is a variable the web client can
+     only show as its raw key, with no hover card
 4. Country geometry is imported into `demscore.countries_src` (via `ogr2ogr` in `scripts/setup_mapserver_hex_service.sh`).
 5. `sql/mapserver_hex_setup.sql`:
    - normalizes country geometry into `demscore.countries` (4326 + 3857)
