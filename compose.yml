@@ -64,11 +64,13 @@ services:
       PGUSER: demscore
       PGPASSWORD: ${POSTGRES_PASSWORD:-demscore}
       CONFIG_DIR: /app/webapp-config
+      REFERENCE_DATA_DIR: /app/reference-data
     working_dir: /app
     command: sh -lc "npm install --no-audit --no-fund && npm run start"
     volumes:
       - ./web-backend:/app
       - ./webapp/config:/app/webapp-config:ro
+      - ./data/reference:/app/reference-data:ro
     restart: unless-stopped
 
   web:

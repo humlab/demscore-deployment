@@ -6,21 +6,26 @@ const { Pool } = require("pg");
 
 const PORT = Number.parseInt(process.env.PORT || "8091", 10);
 const CONFIG_DIR = process.env.CONFIG_DIR || path.join(__dirname, "webapp-config");
+const REFERENCE_DATA_DIR = process.env.REFERENCE_DATA_DIR || path.join(__dirname, "..", "data", "reference");
+const LAND_BASEMAP_FILE = "ne_110m_admin_0_countries.geojson";
 const WMS_BASE_PATH = "/mapserver?map=/etc/mapserver/mapserver.map";
 
 const DATASET_META = {
   qog: {
     label: "QoG",
+    title: "Quality of Government",
     codebook: "./assets/codebooks/qog-codebook.pdf",
     defaultVariable: "qog_std_ts_ti_cpi",
   },
   repdem: {
     label: "REPDEM",
+    title: "Representative Democracy",
     codebook: "./assets/codebooks/repdem-codebook.pdf",
     defaultVariable: "repdem_basic_enpp",
   },
   v_dem: {
     label: "V-Dem",
+    title: "Varieties of Democracy",
     codebook: "./assets/codebooks/v-dem-codebook.pdf",
     defaultVariable: "v2x_polyarchy",
   },
@@ -88,22 +93,58 @@ async function fetchVariablesConfigFromDb() {
       FROM demscore.variables
       GROUP BY dataset
     ),
-    years AS (
+    coverage_by_year AS (
       SELECT
         v.dataset,
-        MIN(dv.year)::INT AS year_min,
-        MAX(dv.year)::INT AS year_max
+        v.variable,
+        dv.year::INT AS year
       FROM demscore.variables v
       JOIN demscore.dataset_values dv ON dv.variable_id = v.id
-      GROUP BY v.dataset
+      WHERE dv.country_id IS NOT NULL
+      GROUP BY v.dataset, v.variable, dv.year
+    ),
+    coverage AS (
+      SELECT
+        dataset,
+        variable,
+        MIN(year)::INT AS year_min,
+        MAX(year)::INT AS year_max,
+        array_agg(year ORDER BY year) AS available_years
+      FROM coverage_by_year
+      GROUP BY dataset, variable
+    ),
+    years AS (
+      SELECT
+        dataset,
+        MIN(year_min)::INT AS year_min,
+        MAX(year_max)::INT AS year_max
+      FROM coverage
+      GROUP BY dataset
+    ),
+    coverage_by_dataset AS (
+      SELECT
+        dataset,
+        jsonb_object_agg(
+          variable,
+          jsonb_build_object(
+            'yearMin', year_min,
+            'yearMax', year_max,
+            'availableYears', to_jsonb(available_years)
+          )
+          ORDER BY variable
+        ) AS variable_coverage
+      FROM coverage
+      GROUP BY dataset
     )
     SELECT
       vars.dataset,
       vars.variables,
       years.year_min,
-      years.year_max
+      years.year_max,
+      coverage_by_dataset.variable_coverage
     FROM vars
     LEFT JOIN years ON years.dataset = vars.dataset
+    LEFT JOIN coverage_by_dataset ON coverage_by_dataset.dataset = vars.dataset
     ORDER BY vars.dataset;
   `;
 
@@ -123,10 +164,12 @@ async function fetchVariablesConfigFromDb() {
 
     datasets[datasetKey] = {
       label: fallbackMeta.label || datasetKey,
+      title: fallbackMeta.title || fallbackMeta.label || datasetKey,
       codebook: fallbackMeta.codebook,
       defaultVariable,
       yearMin: Number.isInteger(row.year_min) ? row.year_min : DEFAULTS.year,
       yearMax: Number.isInteger(row.year_max) ? row.year_max : DEFAULTS.year,
+      variableCoverage: row.variable_coverage || {},
       variables,
     };
   }
@@ -326,6 +369,10 @@ async function getVariablePolarityConfig() {
   return readJsonConfig("variable_polarity.json", {});
 }
 
+async function getLandBasemapGeoJson() {
+  return fs.readFile(path.join(REFERENCE_DATA_DIR, LAND_BASEMAP_FILE), "utf8");
+}
+
 app.get("/healthz", asyncRoute(async (_req, res) => {
   const dbResult = await pool.query("SELECT 1 AS ok;");
   res.json({ status: "ok", db: dbResult.rows?.[0]?.ok === 1 });
@@ -335,6 +382,14 @@ app.get("/api/runtime", asyncRoute(async (_req, res) => {
   res.json({
     mapServerBase: WMS_BASE_PATH,
   });
+}));
+
+app.get("/api/basemap/land", asyncRoute(async (_req, res) => {
+  const geojson = await getLandBasemapGeoJson();
+  res
+    .type("application/geo+json")
+    .set("Cache-Control", "public, max-age=86400")
+    .send(geojson);
 }));
 
 app.get("/api/config", asyncRoute(async (_req, res) => {
