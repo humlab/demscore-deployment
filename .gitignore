@@ -38,3 +38,7 @@ venv/
 # Build artifacts
 dist/
 build/
+
+todo.md
+
+quadlet-deployment/
