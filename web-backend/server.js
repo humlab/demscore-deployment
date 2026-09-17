@@ -20,7 +20,6 @@ const DATASET_META = {
   repdem: {
     label: "REPDEM",
     title: "Representative Democracy",
-    color: "#a76510",
     codebook: "./assets/codebooks/repdem-codebook.pdf",
     defaultVariable: "repdem_basic_enpp",
   },
@@ -31,6 +30,10 @@ const DATASET_META = {
     defaultVariable: "v2x_polyarchy",
   },
 };
+
+// How a dataset presents itself, as opposed to what it contains. The database
+// supplies the variables and the year span; these come from config.
+const DATASET_PRESENTATION_KEYS = ["label", "title", "color", "palette", "codebook", "image"];
 
 const DEFAULTS = {
   dataset: "v_dem",
@@ -197,11 +200,37 @@ async function fetchVariablesConfigFromDb() {
   };
 }
 
+// `DATASET_META` is only a built-in default. `webapp/config/variables.json` is
+// the documented source of a dataset's presentation metadata, but the database
+// path never read it, so anything added there — a colour palette, say — was
+// silently ignored unless the whole `demscore.variables` table was missing.
+function overlayDatasetPresentation(dbConfig, fileConfig) {
+  const fileDatasets =
+    fileConfig?.datasets && typeof fileConfig.datasets === "object" ? fileConfig.datasets : {};
+
+  for (const [datasetKey, dataset] of Object.entries(dbConfig.datasets)) {
+    const fromFile = fileDatasets[datasetKey];
+    if (!fromFile || typeof fromFile !== "object") continue;
+
+    for (const key of DATASET_PRESENTATION_KEYS) {
+      if (fromFile[key] !== undefined) dataset[key] = fromFile[key];
+    }
+    // A default the file names only counts if the dataset still has it.
+    if (
+      typeof fromFile.defaultVariable === "string" &&
+      dataset.variables.includes(fromFile.defaultVariable)
+    ) {
+      dataset.defaultVariable = fromFile.defaultVariable;
+    }
+  }
+  return dbConfig;
+}
+
 async function getVariablesConfig() {
   try {
     const dbConfig = await fetchVariablesConfigFromDb();
     if (dbConfig) {
-      return dbConfig;
+      return overlayDatasetPresentation(dbConfig, await readJsonConfig("variables.json", null));
     }
   } catch (error) {
     if (error.code !== "42P01") {

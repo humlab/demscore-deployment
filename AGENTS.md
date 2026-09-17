@@ -129,7 +129,13 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `mapserver/mapserver.map`: WMS config and style classes
 - `mapserver/README.md`: WMS parameter contract
 - `webapp/index.html`, `webapp/app.js`, `webapp/styles.css`: UI
-- `webapp/config/variables.json`: dataset defaults and allowed variables
+- `webapp/config/variables.json`: dataset presentation metadata — `label`, `title`, `color`,
+  `palette` (five shades, darkest first), `codebook`, `image`, `defaultVariable`. The variable
+  lists and year spans in it are only a fallback: `getVariablesConfig()` builds those from
+  `demscore.variables`, then `overlayDatasetPresentation()` lays this file's presentation keys
+  over the result. Before that overlay existed the database path never read the file at all, so
+  anything added here was silently ignored and `DATASET_META` in `web-backend/server.js` was the
+  real source
 - `webapp/config/variable_coverage.json`: generated coverage strips, served as
   `/api/config/variable-coverage`
 - `webapp/config/variable_topics.json`: the curated cross-dataset topics the variable list's
