@@ -71,7 +71,7 @@ The system turns tabular democracy indicator data into a thematic global hex map
      sovereigns split into geographic units, which is what makes overseas territories
      separable from the mainland
 5. `sql/mapserver_hex_setup.sql`:
-   - normalizes country geometry into `demscore.countries` (4326 + 3857), taking identity
+   - normalizes country geometry into `demscore.countries` (4326 + 8857), taking identity
      from `countries_src` and geometry from the map units dissolved per `adm0_a3`, minus
      overseas units — one that carries its own ISO code while its sovereign is drawn as
      several units (French Guiana, Svalbard). Without this a country's hexagons land on
@@ -180,7 +180,10 @@ Accepted parameters for `hex_variable` and `hex_outline`:
 MapServer applies validation defaults; SQL additionally clamps:
 
 - year: `1500..2100`
-- hex size: `40000..600000` meters
+- hex size: `20000..300000` meters (Equal Earth metres, so the same real area anywhere)
+
+Advertised CRS: `EPSG:4326` and `EPSG:8857`. The web app asks for `EPSG:8857` with WMS
+1.1.1 (`SRS`, not `CRS`), which sidesteps 1.3.0's axis-order rules.
 
 ## 6) Local Setup and Operations
 
@@ -218,11 +221,26 @@ Set cache toggle in `.env`:
 - `demscore.dataset_values` is the normalized value layer. If dataset column names change, update loader extraction logic first.
 - `demscore.variable_metadata` is the UI-facing dictionary layer (human titles, citations, descriptions, provenance).
 - `demscore.variable_metadata_raw` is a refreshable staging table for parsed codebook output.
-- `demscore.hex_mesh` stores precomputed geometry for `hex_size` values 40000..600000 (step 10000).
+- `demscore.hex_mesh` stores precomputed geometry for `hex_size` values 20000..300000 (step 5000).
 - `demscore.hex_borders` is derived from `demscore.hex_mesh` and is rebuilt with it. It matches
   the two sides of an edge by exact geometry, which holds because `ST_HexagonGrid` makes every
   country's mesh part of one global grid; a change that gave countries their own grids would
   silently leave every hexagon outlined on its own.
+- Everything spatial is EPSG:8857, Equal Earth. One hexagon is one real area anywhere on
+  the map, which is the only reading under which a hexagon count means anything; Web
+  Mercator scaled area by sec^2(latitude) and the mesh inherited it, so Russia carried
+  795 hexagons across 17.0M km2 while Brazil carried 85 across 8.5M. There is no
+  Mercator path left in the stack and no projection toggle.
+  - the size ladder is deliberately half the old Mercator one. A Mercator hexagon covered
+    ground area proportional to cos^2(latitude), so the old sizes were counting on a
+    surplus of hexagons near the poles; halved, the meshes land within 4% of the old
+    counts at every stop the app uses while carrying real areas.
+  - `demscore.countries.geom_8857` has no latitude clip. The old `+/-85.05112878` cut was
+    Web Mercator's limit, not the world's.
+- Deriving a world extent by transforming the `(-180,-90)` and `(180,90)` corners gives a
+  box 41% too narrow. Equal Earth is widest on the equator (x = `+/-17243959`) and
+  narrowest at the poles (`+/-10216474`); y runs to `+/-8392927`. Every extent in the
+  stack -- mapfile, preloader, `webapp/src/core/projection.js` -- comes from those numbers.
 - Preserve join quality in `hex_variable`: ISO3 matching is primary; name matching is fallback.
 - `webapp/config/variable_coverage.json` is derived from `demscore.dataset_values`. It is a
   build artifact, not a source of truth, and goes stale silently: rerun

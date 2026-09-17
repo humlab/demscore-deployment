@@ -1,246 +1,100 @@
-# Map Projection Upgrade: Equal Earth Investigation
-
-## Goal
-
-Investigate whether Demscore can render the map in the 2018 Equal Earth projection in addition to the existing Web Mercator-oriented rendering.
-
-## Summary
-
-Adding Equal Earth support is feasible. The local runtime already has the projection support needed at the spatial stack level:
-
-- PostGIS `spatial_ref_sys` includes `EPSG:8857`, "WGS 84 / Equal Earth Greenwich".
-- The MapServer container reports MapServer 8.4.1 with PROJ 9.5, and `projinfo EPSG:8857` resolves to `+proj=eqearth`.
-
-The current application is nevertheless built around Web Mercator assumptions:
-
-- Countries are stored as both `geom_4326` and `geom_3857`.
-- Hex meshes and hex borders are generated and stored only in `EPSG:3857`.
-- MapServer advertises only `EPSG:4326 EPSG:3857`.
-- Leaflet uses its default CRS, which is Web Mercator.
-- The scripted mapcache preloader computes tile BBOXes using Web Mercator extents and requests `SRS=EPSG:3857`.
-
-The main work is therefore not basic projection support. It is adding a second projection mode cleanly through MapServer, database geometry, and the Leaflet client.
-
-## Current Projection Dependencies
-
-### Database
-
-`sql/mapserver_hex_setup.sql` creates `demscore.countries` with:
-
-- `geom_4326 geometry(MultiPolygon, 4326)`
-- `geom_3857 geometry(MultiPolygon, 3857)`
-
-The setup then builds `demscore.hex_mesh` from `geom_3857` using `ST_HexagonGrid(...)`. The table stores:
-
-- `geom geometry(Polygon, 3857)`
-
-`demscore.hex_borders` also stores:
-
-- `geom geometry(MultiLineString, 3857)`
-
-`demscore.hex_variable(...)` returns `geometry(Polygon, 3857)`.
-
-Implication: the current hexagons are native Web Mercator hexagons. If MapServer reprojects them into Equal Earth at render time, the result will display in Equal Earth, but the hexagons themselves were not generated in an equal-area coordinate space.
-
-### MapServer
-
-`mapserver/mapserver.map` currently has:
-
-- map projection: `init=epsg:4326`
-- advertised WMS SRS: `EPSG:4326 EPSG:3857`
-- `hex_variable` source projection: `init=epsg:3857`
-- `hex_outline` source projection: `init=epsg:3857`
-
-A direct `GetMap` probe with `CRS=EPSG:8857` currently returns an `InvalidSRS` XML exception because `EPSG:8857` is not advertised as valid for the requested layers.
-
-Implication: MapServer likely only needs mapfile changes for a first server-side Equal Earth render, but each requested layer must advertise the CRS.
-
-### Frontend
-
-`webapp/src/controllers/MapController.js` creates Leaflet with no custom CRS:
-
-```js
-this.map = L.map("mapCanvas", { ... });
-```
-
-Leaflet defaults to Web Mercator. The WMS layer is created with `L.tileLayer.wms(...)` and WMS `version: "1.1.1"`, so browser tile coordinates and BBOX generation are Web Mercator-oriented.
-
-Implication: client support needs `proj4` plus a Leaflet CRS bridge such as `Proj4Leaflet`, or a different mapping approach for projected image requests. Leaflet cannot reliably switch CRS on an existing map instance; a projection toggle should probably recreate the map.
-
-### Basemap
-
-The land basemap is loaded as GeoJSON from `/api/basemap/land` and displayed with `L.geoJSON(...)`.
-
-Implication: with a custom Leaflet CRS, this can still work if the CRS plugin correctly projects GeoJSON lat/lon coordinates. It should be tested carefully around the dateline and high latitudes.
-
-### Cache
-
-Runtime nginx mapcache should naturally cache Equal Earth requests because the request URL includes CRS/SRS and BBOX.
-
-`scripts/preload_mapcache_tiles.sh` is hard-coded to Web Mercator:
-
-- `WEB_MERCATOR_HALF=20037508.342789244`
-- tile BBOX math assumes a square Web Mercator world
-- request URL includes `SRS=EPSG:3857`
-
-Implication: normal runtime caching does not block Equal Earth, but scripted cache warming needs a projection-aware branch if it should preload Equal Earth tiles.
-
-## Implementation Options
-
-## Option A: Reproject Existing Web Mercator Hexes at Render Time
-
-This is the smallest implementation.
-
-### Server work
-
-1. Add `EPSG:8857` to `wms_srs` at the map and layer metadata levels.
-2. Add suitable map/layer extents or bounding boxes for Equal Earth if MapServer needs them for clean capabilities output and request validation.
-3. Keep layer source projections as `EPSG:3857`.
-4. Let MapServer reproject the existing `hex_mesh.geom` and `hex_borders.geom` into `EPSG:8857` for WMS output.
-5. Add a setup smoke test for a `GetMap` request with `CRS=EPSG:8857`.
-
-### Frontend work
-
-1. Add `proj4` and `Proj4Leaflet`, either vendored locally or loaded consistently with the current CDN pattern.
-2. Define `EPSG:8857`:
-
-   ```text
-   +proj=eqearth +lon_0=0 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs
-   ```
-
-3. Define projected bounds. The observed country extent was approximately:
-
-   ```text
-   x: -16923980.33 to 16923980.33
-   y:  -8392927.60 to  8316222.40
-   ```
-
-   The mathematical full-world corners from `(-180,-90)` and `(180,90)` are approximately:
-
-   ```text
-   x: -10216474.79 to 10216474.79 at the poles
-   y:  -8392927.60 to  8392927.60
-   ```
-
-   Because Equal Earth has widest x extent away from the poles, use a full projected world extent from PROJ/MapServer testing rather than only corner transforms.
-
-4. Create the map with the custom CRS when Equal Earth mode is selected.
-5. Recreate the Leaflet map when switching between Web Mercator and Equal Earth.
-6. Ensure WMS tile requests use the matching CRS/SRS and BBOX axis order. WMS 1.1.1 with `SRS=EPSG:8857` is likely simpler than WMS 1.3.0 axis-order handling.
-7. Include the projection mode in tile/preload signatures and cache keys where the app tracks loading state.
-
-### Pros
-
-- Smallest database change: none.
-- No additional hex precomputation.
-- Fastest way to prove the UX and rendering path.
-
-### Cons
-
-- Hexagons are generated in Web Mercator, then warped into Equal Earth.
-- Areas and shapes of the rendered hexagons will not be native Equal Earth hexagons.
-- This may be visually acceptable for an initial mode, but it is not the cleanest thematic cartography.
-
-## Option B: Add Native Equal Earth Hex Meshes
-
-This is the stronger implementation.
-
-### Server/database work
-
-1. Add `geom_8857 geometry(MultiPolygon, 8857)` to `demscore.countries`, generated from `geom_4326`.
-2. Add a native Equal Earth hex mesh table, for example:
-
-   - `demscore.hex_mesh_8857`
-   - `demscore.hex_borders_8857`
-
-3. Generate the Equal Earth mesh with `ST_HexagonGrid(hex_size_m, geom_8857)`.
-4. Select hexes using `ST_PointOnSurface(...)` within the Equal Earth country geometry.
-5. Rebuild border detection for the Equal Earth mesh using the same exact-edge matching approach.
-6. Expose either:
-
-   - separate WMS layers such as `hex_variable_equalearth` and `hex_outline_equalearth`, or
-   - parameterized SQL that chooses the mesh by a validated projection parameter.
-
-Separate layers are safer in MapServer because they keep SRID declarations explicit.
-
-### Frontend work
-
-Same as Option A, except Equal Earth mode should request the Equal Earth layers rather than the existing layers.
-
-### Pros
-
-- Hexagons are native to the Equal Earth projected plane.
-- Better matches the intent of an equal-area world map.
-- Avoids visually odd warped Web Mercator hexes.
-
-### Cons
-
-- Larger setup time and storage footprint.
-- More SQL and MapServer configuration to maintain.
-- Need to decide whether `hex_size_m` stops should match Web Mercator values or be tuned separately for Equal Earth.
-
-## Recommended Plan
-
-Implement in two phases.
-
-### Phase 1: Thin Equal Earth Prototype
-
-Purpose: validate browser, WMS, and UX behavior with minimal data model churn.
-
-1. Add `EPSG:8857` to MapServer WMS metadata for the map and both current layers.
-2. Add a temporary/manual `GetMap` smoke request for `EPSG:8857`.
-3. Add frontend CRS support with `proj4` and `Proj4Leaflet`.
-4. Add a projection selector with two modes:
-
-   - Web Mercator
-   - Equal Earth
-
-5. Recreate the Leaflet map when projection changes.
-6. Verify:
-
-   - world fit at desktop and mobile sizes
-   - panning bounds
-   - zoom behavior
-   - WMS tile alignment
-   - land GeoJSON alignment with WMS hex tiles
-   - outlines alignment with fills
-   - timeline preloading still behaves sensibly
-
-If the reprojected Web Mercator hexes look acceptable, this phase could be enough for a first release.
-
-### Phase 2: Native Equal Earth Mesh
-
-Purpose: make the Equal Earth mode cartographically correct.
-
-1. Extend SQL setup with `geom_8857`.
-2. Add native Equal Earth mesh and border tables.
-3. Add Equal Earth WMS layers sourced from those tables.
-4. Tune Equal Earth-specific hex size stops.
-5. Update setup smoke tests to validate both projections.
-6. Update cache preloader to accept a projection option:
-
-   - `webmercator`: current behavior
-   - `equalearth`: Equal Earth bounds and `SRS=EPSG:8857`
-
-7. Document the projection modes in `mapserver/README.md` and `webapp/README.md`.
-
-## Testing Checklist
-
-For either implementation:
-
-1. `GetCapabilities` advertises `EPSG:8857` for all intended layers.
-2. `GetMap` returns `image/png`, not XML, for an Equal Earth request.
-3. The Equal Earth layer renders both fills and outlines.
-4. The land basemap aligns with the hex layer.
-5. Dataset, variable, year, polarity, outline toggle, and zoom-driven hex size changes still work.
-6. Mobile layout still fits and controls remain usable.
-7. Timeline tile preloading does not reuse statuses across projections.
-8. Optional mapcache mode caches Equal Earth URLs separately from Web Mercator URLs.
-
-## Open Questions
-
-1. Should Equal Earth initially reuse the existing Web Mercator hex mesh, or should the first shipped version wait for a native Equal Earth mesh?
-2. Should the UI expose projection as a persistent preference?
-3. Should Equal Earth use the same hex sizes as Web Mercator, or projection-specific stops tuned by visual density?
-4. Should the land basemap remain GeoJSON in the browser, or should it also come from MapServer as a projected layer for perfect alignment?
-
+# Map Projection Upgrade: Equal Earth
+
+**Status: done.** The map is drawn in Equal Earth (EPSG:8857) and so is the hex mesh.
+Web Mercator is gone from the stack; there is no projection toggle.
+
+This file began as an investigation into adding Equal Earth *alongside* Web Mercator.
+That framing is what made it look expensive. What follows is what was decided, what was
+measured, and what turned out to be wrong in the original plan.
+
+## The decision
+
+Replace rather than add. Nearly every cost in the original plan came from the word
+"alongside": a second mesh, a toggle, recreating the Leaflet map on switch, dual cache
+warming, projection in the preload signature, a doubled test matrix. For a country-level
+thematic map Web Mercator is the indefensible one -- it inflates exactly the countries
+these indicators are most often read about -- so keeping it bought nothing.
+
+## Why the mesh had to be rebuilt, not reprojected
+
+The original plan's Option A was to keep the Web Mercator mesh and let MapServer
+reproject it, shipping that if it "looked acceptable". It does not. The defect is not
+shape but size: every hexagon was identical in *Mercator* metres, so in an equal-area
+projection each draws at its true ground area, which falls off as cos^2(latitude).
+
+| latitude band | avg true area | vs equator |
+|---|---|---|
+| 0-20 | 98 515 km2 | 1x |
+| 41-60 | 41 142 km2 | 2.4x smaller |
+| 60-80 | 14 310 km2 | 6.9x smaller |
+| 80-83 | 2 338 km2 | 42x smaller |
+
+Per country: Russia carried 795 hexagons across 17.0M km2, Brazil 85 across 8.5M --
+twice the area, a ninth of the hexagons. Reprojected, that renders as fine confetti over
+Russia and Canada against coarse blobs over Africa and Brazil.
+
+The original plan also had the cost backwards. It listed "larger setup time and storage
+footprint" as the con of a native mesh. A native Equal Earth mesh at the same nominal
+size is about **4x smaller** (1 396 hexagons against 5 917 at the world view), because
+the Mercator surplus at high latitudes is what it was generating. The full rebuild takes
+about 90 seconds and the table came out slightly smaller than before, 171MB against 177MB.
+
+## What the sizes had to become
+
+The ladder is the old one halved: `20000..300000` step `5000` for `40000..600000` step
+`10000`, and the app's stops are `100000 / 60000 / 40000 / 25000`. Halving is what keeps
+the map's density, because the old sizes were implicitly counting on the Mercator
+surplus. Measured against the old mesh at each stop the app uses:
+
+| app stop | Equal Earth hexes | old Mercator hexes | countries with hexes (EE / Merc) |
+|---|---|---|---|
+| world view | 5 690 | 5 917 | 159 / 133 |
+| second | 15 827 | 16 446 | 174 / 157 |
+| third | 35 341 | 36 973 | 177 / 169 |
+| finest | 90 757 | 94 698 | 177 / 176 |
+
+Within 4% on density at every stop, and more countries drawn at every stop. Small
+countries dropping out at coarse meshes is pre-existing behaviour, not a regression --
+Mercator dropped 44 at its world stop, Equal Earth drops 18 at its own.
+
+## The two traps in the client
+
+Both come from one fact the original plan never reached: **Equal Earth fills a lens, not
+the rectangle that bounds it.**
+
+1. **No LatLngBounds can describe the world.** The projection is widest on the equator
+   (x = +/-17243959) and narrowest at the poles (+/-10216474), and Leaflet projects only
+   the two corners of a bounds. The obvious `maxBounds: [[-90,-180],[90,180]]` therefore
+   describes the world at its pole width, 41% too narrow, and would have put Indonesia,
+   Australia, Japan and New Zealand permanently out of reach; the same box in
+   `getBoundsZoom` and in the tile layer's `bounds` option would have marked their tiles
+   invalid so the map never asked for them. Widening the box past +/-180 does not work
+   either -- proj4 wraps. Panning, world fit and the tile range all read the CRS's
+   projected bounds instead.
+
+2. **The projection has to be total, or the first paint is fatal.** Whenever the world
+   does not exactly fill the window -- a fixed 2.055:1 box in a window of whatever shape,
+   so nearly always -- Leaflet unprojects the corners of the letterboxed viewport, which
+   are off the globe. proj4 answers with a NaN latitude and `GridLayer._updateLevels`
+   throws `Invalid LatLng object` before a single tile is drawn. The projection is
+   extended past the globe so this cannot happen, and `unproject` never takes proj4's
+   longitude, which wraps past +/-180 and would otherwise return a point half a world away.
+
+The CRS reuses Web Mercator's resolution ladder on purpose, so a zoom level still means
+the metres per pixel it always did and the zoom thresholds did not have to move.
+
+## What was investigated and deliberately not built
+
+**Densifying the land basemap.** Equal Earth curves the meridians, so a long straight
+lat/lon edge in the GeoJSON is drawn as a chord of the curve it should follow. Measured
+across Natural Earth 110m: the worst segment in the world (the 141W Alaska/Yukon border)
+is off by 6.3km, which is 0.2px at the world view and 2.6px at `MAX_ZOOM`. Eight segments
+out of 10 360 exceed 1px even at the deepest zoom. Not worth a densify step at this data
+resolution -- re-measure before adding one if the basemap ever gets finer.
+
+## Known, unrelated
+
+`scripts/preload_mapcache_tiles.sh` warms `LAYERS=hex_variable` while the app requests
+`hex_variable,hex_outline`. The nginx cache keys on the full request URI, so the warmed
+entries are not the ones the app asks for. This predates the projection work and was left
+alone; it is a one-word fix but it changes how much the preloader writes.

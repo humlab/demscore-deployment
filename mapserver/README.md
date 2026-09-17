@@ -2,6 +2,12 @@
 
 This directory contains a file-configured MapServer WMS setup for rendering hexagon layers from the Demscore PostgreSQL/PostGIS database.
 
+## Projection
+
+Everything is served in **EPSG:8857, Equal Earth**, which is also the projection the hex mesh is generated in. One hexagon is therefore one real area anywhere on the map. `EPSG:4326` is advertised as well and MapServer will reproject into it; there is no Web Mercator anywhere in the stack.
+
+The world box is `-17243960 -8392928 17243960 8392928`. Do not derive that by transforming the `(-180,-90)` and `(180,90)` corners: Equal Earth is at its widest on the equator, where x reaches `+/-17243959`, and narrows to `+/-10216474` at the poles, so a corner-derived extent is 41% too narrow.
+
 ## Layers
 
 - `hex_variable`: dynamic hexagons colored by quantile class for a selected dataset variable and year.
@@ -21,7 +27,7 @@ Pass these as WMS request parameters:
 - `dataset`: `qog` | `repdem` | `v_dem`
 - `variable`: column name in the selected dataset
 - `year`: 4-digit year
-- `hex_size`: hexagon edge size in meters; local setup precomputes `40000` to `600000` in `10000` meter steps, and the web app uses `200000`, `120000`, `80000`, and `50000` as zoom-responsive stops
+- `hex_size`: hexagon edge size in Equal Earth meters; local setup precomputes `20000` to `300000` in `5000` meter steps, and the web app uses `100000`, `60000`, `40000`, and `25000` as zoom-responsive stops
 - `polarity`: `positive` | `negative` | `neutral` (`positive` flips class colors so higher values are bluer; `neutral` uses a single-hue green ramp); read by `hex_variable` only
 
 Defaults:
@@ -29,7 +35,7 @@ Defaults:
 - `dataset=v_dem`
 - `variable=v2x_polyarchy`
 - `year=2020`
-- `hex_size=200000`
+- `hex_size=100000`
 - `polarity=negative`
 
 ## Capabilities URL
@@ -42,4 +48,6 @@ Optional cached endpoint (when `mapcache` profile is running):
 
 ## Example GetMap URL
 
-`http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&CRS=EPSG:4326&BBOX=-60,-180,85,180&WIDTH=1200&HEIGHT=700&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=200000&polarity=positive`
+The whole world, requested the way the web app requests it (WMS 1.1.1 and `SRS`, which sidesteps 1.3.0's axis-order rules):
+
+`http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000&polarity=positive`
