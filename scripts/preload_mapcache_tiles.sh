@@ -22,7 +22,7 @@ Options:
   --zoom-min N           Minimum Leaflet zoom level to warm (default: 1)
   --zoom-max N           Maximum Leaflet zoom level to warm (default: 4)
   --tile-size N          WMS tile WIDTH/HEIGHT in pixels (default: 512)
-  --hex-size N           hex_size WMS parameter (default: 200000)
+  --hex-size N           hex_size WMS parameter (default: 100000)
   --latest-year-only     Warm only each variable's latest available year
   --dataset LIST         Comma-separated dataset filter (e.g. qog,repdem)
   --max-requests N       Stop after N requests (for smoke testing)
@@ -46,7 +46,7 @@ is_truthy() {
 ZOOM_MIN=1
 ZOOM_MAX=4
 TILE_SIZE=512
-HEX_SIZE=200000
+HEX_SIZE=100000
 LATEST_YEAR_ONLY=0
 DATASET_FILTER=""
 MAX_REQUESTS=0
@@ -141,7 +141,16 @@ else
   QUERY_JOIN="&"
 fi
 
-WEB_MERCATOR_HALF=20037508.342789244
+# Equal Earth (EPSG:8857). The world is not a square the way Web Mercator's was:
+# it is widest on the equator at +/-17243959.06 and reaches only +/-8392927.60
+# north-south, a 2.055:1 box. Tile rows and columns are therefore counted
+# separately from the world's real size rather than assumed to be 2^z of each.
+EQUAL_EARTH_HALF_X=17243959.06221695
+EQUAL_EARTH_HALF_Y=8392927.598466456
+# The Web Mercator resolution ladder, kept deliberately: the web app pins its
+# CRS to these same metres-per-pixel so a zoom level means the same scale it
+# always did, and only the shape of the world underneath it changed.
+ZOOM_ZERO_RESOLUTION=156543.03392804097
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -152,21 +161,22 @@ FAILURES_FILE="$TMP_DIR/failures.tsv"
 
 build_tiles() {
   : > "$TILES_FILE"
-  local z n x y
+  local z
   for (( z=ZOOM_MIN; z<=ZOOM_MAX; z++ )); do
-    n=$((1 << (z - 1)))
-    for (( x=0; x<n; x++ )); do
-      for (( y=0; y<n; y++ )); do
-        awk -v m="$WEB_MERCATOR_HALF" -v n="$n" -v x="$x" -v y="$y" -v z="$z" 'BEGIN {
-          step=(2*m)/n;
-          xmin=-m + (x*step);
-          xmax=xmin + step;
-          ymax=m - (y*step);
-          ymin=ymax - step;
-          printf "%d\t%d\t%d\t%.8f\t%.8f\t%.8f\t%.8f\n", z, x, y, xmin, ymin, xmax, ymax;
-        }' >> "$TILES_FILE"
-      done
-    done
+    awk -v hx="$EQUAL_EARTH_HALF_X" -v hy="$EQUAL_EARTH_HALF_Y" \
+        -v r0="$ZOOM_ZERO_RESOLUTION" -v ts="$TILE_SIZE" -v z="$z" 'BEGIN {
+      span = (r0 / (2 ^ z)) * ts;          # metres covered by one tile edge
+      nx = int((2 * hx) / span); if (nx * span < 2 * hx) nx++;
+      ny = int((2 * hy) / span); if (ny * span < 2 * hy) ny++;
+      for (x = 0; x < nx; x++) {
+        for (y = 0; y < ny; y++) {
+          xmin = -hx + (x * span);
+          ymax =  hy - (y * span);
+          printf "%d\t%d\t%d\t%.8f\t%.8f\t%.8f\t%.8f\n", \
+            z, x, y, xmin, ymax - span, xmin + span, ymax;
+        }
+      }
+    }' >> "$TILES_FILE"
   done
 }
 
@@ -245,7 +255,7 @@ while IFS=$'\t' read -r dataset variable year; do
     fi
     request_idx=$((request_idx + 1))
 
-    url="${MAPCACHE_BASE_URL}${QUERY_JOIN}SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:3857&BBOX=${xmin},${ymin},${xmax},${ymax}&WIDTH=${TILE_SIZE}&HEIGHT=${TILE_SIZE}&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=${HEX_SIZE}"
+    url="${MAPCACHE_BASE_URL}${QUERY_JOIN}SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:8857&BBOX=${xmin},${ymin},${xmax},${ymax}&WIDTH=${TILE_SIZE}&HEIGHT=${TILE_SIZE}&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=${HEX_SIZE}"
 
     if (( DRY_RUN == 1 )); then
       if (( request_idx <= 20 )); then

@@ -3,12 +3,16 @@ MAP
   STATUS ON
   IMAGETYPE PNG
   SIZE 1200 700
-  EXTENT -180 -85 180 85
-  UNITS DD
+  # The Equal Earth world box. Note it is NOT the transform of the (-180,-90)
+  # and (180,90) corners: the projection is at its widest on the equator, where
+  # x reaches +/-17243959, and narrows to +/-10216474 at the poles. Deriving
+  # this extent from the corners would cut 41% off the width of the world.
+  EXTENT -17243960 -8392928 17243960 8392928
+  UNITS METERS
   MAXSIZE 10000
 
   PROJECTION
-    "init=epsg:4326"
+    "init=epsg:8857"
   END
 
   WEB
@@ -17,7 +21,7 @@ MAP
       "wms_title" "Demscore Hexagons"
       "wms_abstract" "Hexagon thematic map from Demscore variables in PostGIS"
       "wms_onlineresource" "http://localhost:8088/?map=/etc/mapserver/mapserver.map"
-      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_srs" "EPSG:4326 EPSG:8857"
       "wms_allow_getmap_without_styles" "true"
       "wms_feature_info_mime_type" "text/plain"
       "wms_keywordlist" "demscore,hexagons,postgis"
@@ -28,18 +32,18 @@ MAP
     NAME "hex_variable"
     TYPE POLYGON
     STATUS ON
-    EXTENT -20037508.34 -20037508.34 20037508.34 20037508.34
+    EXTENT -17243960 -8392928 17243960 8392928
     CONNECTIONTYPE POSTGIS
     PROJECTION
-      "init=epsg:3857"
+      "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
       "wms_title" "Dataset Variable Hexagons"
-      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_srs" "EPSG:4326 EPSG:8857"
       "wms_include_items" "all"
       "gml_include_items" "all"
     END
@@ -53,7 +57,7 @@ MAP
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
-      "default_hex_size" "200000"
+      "default_hex_size" "100000"
       "default_polarity" "negative"
     END
 
@@ -217,18 +221,18 @@ MAP
     NAME "hex_outline"
     TYPE LINE
     STATUS ON
-    EXTENT -20037508.34 -20037508.34 20037508.34 20037508.34
+    EXTENT -17243960 -8392928 17243960 8392928
     CONNECTIONTYPE POSTGIS
     PROJECTION
-      "init=epsg:3857"
+      "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
       "wms_title" "Equal-Value Area Outlines"
-      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_srs" "EPSG:4326 EPSG:8857"
       "wms_include_items" "all"
       "gml_include_items" "all"
     END
@@ -241,7 +245,7 @@ MAP
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
-      "default_hex_size" "200000"
+      "default_hex_size" "100000"
     END
 
     CLASS

@@ -27,7 +27,7 @@ CREATE TABLE demscore.countries (
   iso_a2 TEXT,
   id_key TEXT NOT NULL,
   geom_4326 geometry(MultiPolygon, 4326) NOT NULL,
-  geom_3857 geometry(MultiPolygon, 3857) NOT NULL
+  geom_8857 geometry(MultiPolygon, 8857) NOT NULL
 );
 
 -- Country identity (name, codes) comes from demscore.countries_src, the Natural
@@ -38,7 +38,7 @@ CREATE TABLE demscore.countries (
 -- us drop the overseas units -- so a sovereign's hexagons never land on a
 -- territory an ocean away -- while every country keeps the name and codes the
 -- indicator data is matched against.
-INSERT INTO demscore.countries (name, iso_a3, iso_a2, id_key, geom_4326, geom_3857)
+INSERT INTO demscore.countries (name, iso_a3, iso_a2, id_key, geom_4326, geom_8857)
 WITH units AS (
   SELECT
     NULLIF(NULLIF(adm0_a3, ''), '-99') AS adm0_a3,
@@ -91,26 +91,21 @@ SELECT
   c.iso_a2,
   COALESCE(c.iso_a3, lower(c.name)) AS id_key,
   c.geom_4326,
-  ST_Transform(
-    ST_Multi(
-      ST_CollectionExtract(
-        ST_Intersection(
-          c.geom_4326,
-          ST_MakeEnvelope(-180, -85.05112878, 180, 85.05112878, 4326)
-        ),
-        3
-      )
-    ),
-    3857
-  )::geometry(MultiPolygon, 3857) AS geom_3857
+  -- No latitude clip. The old one cut every outline at +/-85.05112878 because
+  -- that is where Web Mercator stops being able to represent the world at all;
+  -- Equal Earth is defined to the poles, so northern Greenland, Svalbard and
+  -- Antarctica keep their real shape instead of ending in a straight line.
+  ST_Multi(
+    ST_CollectionExtract(
+      ST_MakeValid(ST_Transform(c.geom_4326, 8857)),
+      3
+    )
+  )::geometry(MultiPolygon, 8857) AS geom_8857
 FROM c
 WHERE c.name IS NOT NULL
   AND NOT ST_IsEmpty(
     ST_CollectionExtract(
-      ST_Intersection(
-        c.geom_4326,
-        ST_MakeEnvelope(-180, -85.05112878, 180, 85.05112878, 4326)
-      ),
+      ST_MakeValid(ST_Transform(c.geom_4326, 8857)),
       3
     )
   );
@@ -118,7 +113,7 @@ WHERE c.name IS NOT NULL
 CREATE INDEX countries_iso_a3_idx ON demscore.countries (iso_a3);
 CREATE INDEX countries_name_lc_idx ON demscore.countries (lower(name));
 CREATE INDEX countries_geom_4326_gix ON demscore.countries USING GIST (geom_4326);
-CREATE INDEX countries_geom_3857_gix ON demscore.countries USING GIST (geom_3857);
+CREATE INDEX countries_geom_8857_gix ON demscore.countries USING GIST (geom_8857);
 
 UPDATE demscore.dataset_values
 SET country_id = NULL;
@@ -146,7 +141,7 @@ CREATE TABLE demscore.hex_mesh (
   hex_size_m INTEGER NOT NULL,
   hex_n INTEGER NOT NULL,
   id_key TEXT NOT NULL,
-  geom geometry(Polygon, 3857) NOT NULL,
+  geom geometry(Polygon, 8857) NOT NULL,
   PRIMARY KEY (country_id, hex_size_m, hex_n)
 );
 
@@ -154,15 +149,23 @@ CREATE INDEX hex_mesh_size_idx ON demscore.hex_mesh (hex_size_m);
 CREATE INDEX hex_mesh_country_idx ON demscore.hex_mesh (country_id);
 CREATE INDEX hex_mesh_geom_gix ON demscore.hex_mesh USING GIST (geom);
 
+-- Hexagon edge length in Equal Earth metres, which -- the projection being
+-- equal-area -- is the same real area everywhere on the map. The ladder is the
+-- old Web Mercator one halved (40k-600k step 10k becomes 20k-300k step 5k).
+-- Halving is what keeps the map's density: a Mercator hexagon of a given size
+-- covered ground area proportional to cos^2(latitude), so the mesh carried a
+-- surplus of hexagons at high latitudes, and matching today's counts needs a
+-- hexagon of about half the nominal size. Measured, 100k here yields 5 690
+-- hexagons against the old 200k's 5 917.
 WITH sizes AS (
-  SELECT generate_series(40000, 600000, 10000)::INT AS hex_size_m
+  SELECT generate_series(20000, 300000, 5000)::INT AS hex_size_m
 ), raw_hexes AS (
   SELECT
     c.id AS country_id,
     c.id_key,
     s.hex_size_m,
-    c.geom_3857 AS country_geom_3857,
-    (ST_HexagonGrid(s.hex_size_m::FLOAT8, c.geom_3857)).geom AS hex_geom_3857
+    c.geom_8857 AS country_geom_8857,
+    (ST_HexagonGrid(s.hex_size_m::FLOAT8, c.geom_8857)).geom AS hex_geom_8857
   FROM demscore.countries c
   CROSS JOIN sizes s
 ), selected_hexes AS (
@@ -170,9 +173,9 @@ WITH sizes AS (
     rh.country_id,
     rh.id_key,
     rh.hex_size_m,
-    rh.hex_geom_3857
+    rh.hex_geom_8857
   FROM raw_hexes rh
-  WHERE ST_Within(ST_PointOnSurface(rh.hex_geom_3857), rh.country_geom_3857)
+  WHERE ST_Within(ST_PointOnSurface(rh.hex_geom_8857), rh.country_geom_8857)
 ), ranked_hexes AS (
   SELECT
     sh.country_id,
@@ -180,9 +183,9 @@ WITH sizes AS (
     sh.hex_size_m,
     row_number() OVER (
       PARTITION BY sh.country_id, sh.hex_size_m
-      ORDER BY ST_YMin(sh.hex_geom_3857), ST_XMin(sh.hex_geom_3857)
+      ORDER BY ST_YMin(sh.hex_geom_8857), ST_XMin(sh.hex_geom_8857)
     ) AS hex_n,
-    sh.hex_geom_3857::geometry(Polygon, 3857) AS geom
+    sh.hex_geom_8857::geometry(Polygon, 8857) AS geom
   FROM selected_hexes sh
 )
 INSERT INTO demscore.hex_mesh (country_id, hex_size_m, hex_n, id_key, geom)
@@ -229,7 +232,7 @@ CREATE TABLE demscore.hex_borders (
   country_a BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
   -- NULL when no hexagon lies on the other side of the edge.
   country_b BIGINT REFERENCES demscore.countries(id) ON DELETE CASCADE,
-  geom geometry(MultiLineString, 3857) NOT NULL
+  geom geometry(MultiLineString, 8857) NOT NULL
 );
 
 INSERT INTO demscore.hex_borders (hex_size_m, country_a, country_b, geom)
@@ -272,7 +275,7 @@ SELECT
   country_b,
   -- One row per country pair per mesh, merged into continuous lines so the
   -- stroke joins cleanly instead of being drawn as thousands of loose segments.
-  ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 3857) AS geom
+  ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 8857) AS geom
 FROM edges
 WHERE country_count = 2
    OR hex_count = 1
@@ -363,7 +366,7 @@ RETURNS TABLE (
   class_idx INTEGER,
   min_value DOUBLE PRECISION,
   max_value DOUBLE PRECISION,
-  geom geometry(Polygon, 3857)
+  geom geometry(Polygon, 8857)
 )
 LANGUAGE SQL
 STABLE
@@ -373,7 +376,7 @@ WITH normalized AS (
     lower(p_dataset) AS dataset,
     p_variable AS variable,
     GREATEST(1500, LEAST(2100, p_year)) AS year,
-    GREATEST(40000, LEAST(600000, p_hex_size_m))::INT AS hex_size_m
+    GREATEST(20000, LEAST(300000, p_hex_size_m))::INT AS hex_size_m
 )
 SELECT
   hm.id_key || '_' || hm.hex_n AS id,
