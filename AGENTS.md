@@ -132,6 +132,14 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `webapp/config/variables.json`: dataset defaults and allowed variables
 - `webapp/config/variable_coverage.json`: generated coverage strips, served as
   `/api/config/variable-coverage`
+- `webapp/config/variable_topics.json`: the curated cross-dataset topics the variable list's
+  filter chips are built from, served as `/api/config/variable-topics`. Hand-maintained, not
+  generated: the codebook section a variable sits under is dataset-scoped and, for this
+  selection, mostly one variable per section, so it seeds the grouping but cannot be it.
+  Demscore's own 13 published Thematic Datasets were tested against this selection and fit it
+  badly — five themes match nothing here, seven variables land in no theme at all (including
+  four of the five V-Dem democracy indices, since there is no Democracy theme), and all eleven
+  REPDEM variables collapse into one. `topic_classification.wip.md` has the counts and method
 - `mapcache/nginx.conf`: optional reverse-proxy tile cache in front of MapServer
 - `data/`: input datasets + reference boundaries
 - `data/reference/`: Natural Earth boundaries — `ne_110m_admin_0_countries.geojson`

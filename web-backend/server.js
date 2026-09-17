@@ -383,6 +383,14 @@ async function getVariableCoverageConfig() {
   return readJsonConfig("variable_coverage.json", { datasets: {} });
 }
 
+// Curated cross-dataset topics for the variable list. Hand-maintained rather than
+// derived: the codebook section a variable sits under is dataset-scoped and, for
+// this selection, mostly one variable per section, so it seeds the mapping but
+// cannot be it.
+async function getVariableTopicsConfig() {
+  return readJsonConfig("variable_topics.json", { order: [], topics: {}, assignments: {} });
+}
+
 async function getLandBasemapGeoJson() {
   return fs.readFile(path.join(REFERENCE_DATA_DIR, LAND_BASEMAP_FILE), "utf8");
 }
@@ -407,18 +415,21 @@ app.get("/api/basemap/land", asyncRoute(async (_req, res) => {
 }));
 
 app.get("/api/config", asyncRoute(async (_req, res) => {
-  const [variables, legendSemantics, variablePolarity, variableCoverage] = await Promise.all([
-    getVariablesConfig(),
-    getLegendSemanticsConfig(),
-    getVariablePolarityConfig(),
-    getVariableCoverageConfig(),
-  ]);
+  const [variables, legendSemantics, variablePolarity, variableCoverage, variableTopics] =
+    await Promise.all([
+      getVariablesConfig(),
+      getLegendSemanticsConfig(),
+      getVariablePolarityConfig(),
+      getVariableCoverageConfig(),
+      getVariableTopicsConfig(),
+    ]);
 
   res.json({
     variables,
     legendSemantics,
     variablePolarity,
     variableCoverage,
+    variableTopics,
   });
 }));
 
@@ -465,6 +476,12 @@ app.get("/api/config/variable-coverage", asyncRoute(async (_req, res) => {
   res
     .set("Cache-Control", "public, max-age=3600")
     .json(await getVariableCoverageConfig());
+}));
+
+app.get("/api/config/variable-topics", asyncRoute(async (_req, res) => {
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json(await getVariableTopicsConfig());
 }));
 
 app.use((err, _req, res, _next) => {
