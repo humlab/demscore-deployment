@@ -1,0 +1,181 @@
+{
+ "order": [
+  "Democracy Indices",
+  "Rule of Law & Justice",
+  "Corruption",
+  "Media & Expression",
+  "Civil Society",
+  "Cabinets & Government",
+  "Parliament & Party System",
+  "Economy & Development",
+  "Education",
+  "Gender",
+  "State Capacity & Security"
+ ],
+ "assign": {
+  "qog_std_ts_wdi_gers": {
+   "primary": "Education",
+   "also": []
+  },
+  "qog_std_ts_wdi_gersm": {
+   "primary": "Education",
+   "also": []
+  },
+  "qog_std_ts_wdi_gersf": {
+   "primary": "Education",
+   "also": [
+    "Gender"
+   ]
+  },
+  "qog_std_ts_bti_su": {
+   "primary": "Economy & Development",
+   "also": []
+  },
+  "qog_std_ts_wdi_gini": {
+   "primary": "Economy & Development",
+   "also": []
+  },
+  "qog_std_ts_wdi_taxrev": {
+   "primary": "Economy & Development",
+   "also": []
+  },
+  "qog_std_ts_gggi_ggi": {
+   "primary": "Gender",
+   "also": []
+  },
+  "qog_std_ts_ti_cpi": {
+   "primary": "Corruption",
+   "also": []
+  },
+  "qog_std_ts_icrg_qog": {
+   "primary": "Corruption",
+   "also": [
+    "State Capacity & Security"
+   ]
+  },
+  "qog_std_ts_wbgi_gee": {
+   "primary": "State Capacity & Security",
+   "also": []
+  },
+  "qog_std_ts_cbi_cbiw": {
+   "primary": "State Capacity & Security",
+   "also": [
+    "Economy & Development"
+   ]
+  },
+  "qog_std_ts_bicc_gmi": {
+   "primary": "State Capacity & Security",
+   "also": []
+  },
+  "qog_std_ts_fh_rol": {
+   "primary": "Rule of Law & Justice",
+   "also": []
+  },
+  "vdem_cy_v2x_polyarchy": {
+   "primary": "Democracy Indices",
+   "also": []
+  },
+  "vdem_cy_v2x_libdem": {
+   "primary": "Democracy Indices",
+   "also": []
+  },
+  "vdem_cy_v2x_partipdem": {
+   "primary": "Democracy Indices",
+   "also": []
+  },
+  "vdem_cy_v2x_delibdem": {
+   "primary": "Democracy Indices",
+   "also": []
+  },
+  "vdem_cy_v2x_egaldem": {
+   "primary": "Democracy Indices",
+   "also": []
+  },
+  "vdem_cy_v2exrescon": {
+   "primary": "Rule of Law & Justice",
+   "also": []
+  },
+  "vdem_cy_v2jupoatck": {
+   "primary": "Rule of Law & Justice",
+   "also": []
+  },
+  "vdem_cy_v2lgotovst": {
+   "primary": "Rule of Law & Justice",
+   "also": [
+    "Parliament & Party System"
+   ]
+  },
+  "vdem_cy_v2exbribe": {
+   "primary": "Corruption",
+   "also": []
+  },
+  "vdem_cy_v2mecenefm": {
+   "primary": "Media & Expression",
+   "also": []
+  },
+  "vdem_cy_v2meharjrn": {
+   "primary": "Media & Expression",
+   "also": []
+  },
+  "vdem_cy_v2smgovdom": {
+   "primary": "Media & Expression",
+   "also": []
+  },
+  "vdem_cy_v2xca_academ": {
+   "primary": "Media & Expression",
+   "also": []
+  },
+  "vdem_cy_v2cscnsult": {
+   "primary": "Civil Society",
+   "also": []
+  },
+  "vdem_cy_v2dlengage": {
+   "primary": "Civil Society",
+   "also": []
+  },
+  "repdem_basic_cab_composition2": {
+   "primary": "Cabinets & Government",
+   "also": []
+  },
+  "repdem_basic_cab_duration_days": {
+   "primary": "Cabinets & Government",
+   "also": []
+  },
+  "repdem_basic_cab_num_parties": {
+   "primary": "Cabinets & Government",
+   "also": []
+  },
+  "repdem_basic_cab_seatshare": {
+   "primary": "Cabinets & Government",
+   "also": []
+  },
+  "repdem_basic_form_duration_alt": {
+   "primary": "Cabinets & Government",
+   "also": []
+  },
+  "repdem_basic_govtype": {
+   "primary": "Cabinets & Government",
+   "also": []
+  },
+  "repdem_basic_enpp": {
+   "primary": "Parliament & Party System",
+   "also": []
+  },
+  "repdem_basic_num_parties": {
+   "primary": "Parliament & Party System",
+   "also": []
+  },
+  "repdem_basic_seats_total": {
+   "primary": "Parliament & Party System",
+   "also": []
+  },
+  "repdem_basic_upper_seats_total": {
+   "primary": "Parliament & Party System",
+   "also": []
+  },
+  "repdem_basic_parl_polar_ches": {
+   "primary": "Parliament & Party System",
+   "also": []
+  }
+ }
+}
