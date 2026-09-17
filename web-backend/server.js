@@ -35,6 +35,11 @@ const DATASET_META = {
 // supplies the variables and the year span; these come from config.
 const DATASET_PRESENTATION_KEYS = ["label", "title", "color", "palette", "codebook", "image"];
 
+// Mirrors the mapfile's own VALIDATION block for these parameters.
+const VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_]+$/;
+const YEAR_MIN = 1500;
+const YEAR_MAX = 2100;
+
 const DEFAULTS = {
   dataset: "v_dem",
   variable: "v2x_polyarchy",
@@ -420,6 +425,32 @@ async function getVariableTopicsConfig() {
   return readJsonConfig("variable_topics.json", { order: [], topics: {}, assignments: {} });
 }
 
+// The legend paints seven quantile classes; these are the value spans behind
+// them. Same source as the map -- demscore.country_scores() is what the WMS
+// layer classes on -- so the numbers the legend shows on hover are the numbers
+// the hexagons were coloured by, not a second, separately computed set.
+async function getClassBreaks(dataset, variable, year) {
+  const result = await pool.query(
+    `SELECT
+       class_idx::INT AS class_idx,
+       min(value)::DOUBLE PRECISION AS min_value,
+       max(value)::DOUBLE PRECISION AS max_value,
+       count(*)::INT AS country_count
+     FROM demscore.country_scores($1, $2, $3)
+     WHERE class_idx IS NOT NULL
+     GROUP BY class_idx
+     ORDER BY class_idx;`,
+    [dataset, variable, year],
+  );
+
+  return result.rows.map((row) => ({
+    classIndex: row.class_idx,
+    min: row.min_value,
+    max: row.max_value,
+    countryCount: row.country_count,
+  }));
+}
+
 async function getLandBasemapGeoJson() {
   return fs.readFile(path.join(REFERENCE_DATA_DIR, LAND_BASEMAP_FILE), "utf8");
 }
@@ -511,6 +542,31 @@ app.get("/api/config/variable-topics", asyncRoute(async (_req, res) => {
   res
     .set("Cache-Control", "public, max-age=3600")
     .json(await getVariableTopicsConfig());
+}));
+
+// Hovering a legend swatch asks what values it stands for. Keyed exactly like
+// the WMS request the map made (dataset, variable, year), and validated the
+// same way the mapfile validates its own parameters, so an unknown dataset is a
+// 400 here rather than silently falling back to v_dem the way country_scores()
+// would.
+app.get("/api/class-breaks", asyncRoute(async (req, res) => {
+  const dataset = typeof req.query.dataset === "string" ? req.query.dataset.toLowerCase() : "";
+  const variable = typeof req.query.variable === "string" ? req.query.variable : "";
+  const year = Number.parseInt(req.query.year, 10);
+
+  if (!DATASET_META[dataset] || !VARIABLE_KEY_PATTERN.test(variable) || !Number.isInteger(year)
+      || year < YEAR_MIN || year > YEAR_MAX) {
+    res.status(400).json({
+      error: "bad_request",
+      message: "dataset, variable and year query parameters are required and must be valid",
+    });
+    return;
+  }
+
+  const classes = await getClassBreaks(dataset, variable, year);
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json({ dataset, variable, year, classes });
 }));
 
 app.use((err, _req, res, _next) => {

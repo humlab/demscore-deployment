@@ -160,6 +160,13 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - Optional cached WMS: `http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map` (set `DEMSCORE_ENABLE_MAPCACHE=1` in `.env`, then run `./scripts/setup_mapserver_hex_service.sh`)
 - PostgreSQL: `127.0.0.1:5532` (db/user/password default: `demscore`)
 
+### Web backend endpoints
+
+Config payloads (`/api/config/*`, listed in `webapp/AGENTS.md`) are files on disk. The two
+database-backed reads are `/api/config/variables` and `/api/class-breaks`; the latter answers
+the legend's hover card with the quantile class spans for one dataset/variable/year, validated
+the same way the mapfile validates its own parameters.
+
 ### WMS parameter contract
 
 Accepted parameters for `hex_variable` and `hex_outline`:
