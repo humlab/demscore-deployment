@@ -11,8 +11,8 @@ This directory contains a file-configured MapServer WMS setup for rendering hexa
   only their white hairlines. Request it by naming both layers
   (`LAYERS=hex_variable,hex_outline`); omit it to get the fills alone. It reads
   `demscore.hex_borders`, the precomputed table of every hexagon edge that could ever separate
-  two colors, and ignores `polarity` — that only relabels classes, and cannot change which
-  sides match.
+  two colors, and ignores `polarity` -- that only changes the color ramp, and cannot change
+  which sides match.
 
 ## Runtime Parameters
 
@@ -22,7 +22,7 @@ Pass these as WMS request parameters:
 - `variable`: column name in the selected dataset
 - `year`: 4-digit year
 - `hex_size`: hexagon edge size in meters; local setup precomputes `40000` to `600000` in `10000` meter steps, and the web app uses `200000`, `120000`, `80000`, and `50000` as zoom-responsive stops
-- `polarity`: `positive` | `negative` (`positive` flips class colors so higher values are bluer); read by `hex_variable` only
+- `polarity`: `positive` | `negative` | `neutral` (`positive` flips class colors so higher values are bluer; `neutral` uses a single-hue green ramp); read by `hex_variable` only
 
 Defaults:
 

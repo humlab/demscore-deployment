@@ -162,7 +162,7 @@ Accepted parameters for `hex_variable` and `hex_outline`:
 - `variable`: alphanumeric/underscore (`^[A-Za-z0-9_]+$`)
 - `year`: four digits
 - `hex_size`: 5-7 digit integer
-- `polarity`: `positive` | `negative`, read by `hex_variable` only
+- `polarity`: `positive` | `negative` | `neutral`, read by `hex_variable` only
 
 MapServer applies validation defaults; SQL additionally clamps:
 
