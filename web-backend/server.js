@@ -20,6 +20,7 @@ const DATASET_META = {
   repdem: {
     label: "REPDEM",
     title: "Representative Democracy",
+    color: "#a76510",
     codebook: "./assets/codebooks/repdem-codebook.pdf",
     defaultVariable: "repdem_basic_enpp",
   },
@@ -91,6 +92,9 @@ async function fetchVariablesConfigFromDb() {
         dataset,
         array_agg(variable ORDER BY variable) AS variables
       FROM demscore.variables
+      -- Superseded variants (REPDEM's wecee twins) stay in the table and still
+      -- render on a direct WMS request, but are not offered in the variable list.
+      WHERE NOT hidden
       GROUP BY dataset
     ),
     coverage_by_year AS (
@@ -101,6 +105,7 @@ async function fetchVariablesConfigFromDb() {
       FROM demscore.variables v
       JOIN demscore.dataset_values dv ON dv.variable_id = v.id
       WHERE dv.country_id IS NOT NULL
+        AND NOT v.hidden
       GROUP BY v.dataset, v.variable, dv.year
     ),
     coverage AS (
@@ -165,6 +170,7 @@ async function fetchVariablesConfigFromDb() {
     datasets[datasetKey] = {
       label: fallbackMeta.label || datasetKey,
       title: fallbackMeta.title || fallbackMeta.label || datasetKey,
+      color: fallbackMeta.color,
       codebook: fallbackMeta.codebook,
       defaultVariable,
       yearMin: Number.isInteger(row.year_min) ? row.year_min : DEFAULTS.year,
@@ -369,6 +375,14 @@ async function getVariablePolarityConfig() {
   return readJsonConfig("variable_polarity.json", {});
 }
 
+// Built offline by scripts/build_variable_coverage.sh. The variable list draws a
+// coverage strip under every row at once, so unlike the map timeline — which only
+// ever needs the one selected variable — it cannot afford the live per-year
+// aggregate over demscore.dataset_values.
+async function getVariableCoverageConfig() {
+  return readJsonConfig("variable_coverage.json", { datasets: {} });
+}
+
 async function getLandBasemapGeoJson() {
   return fs.readFile(path.join(REFERENCE_DATA_DIR, LAND_BASEMAP_FILE), "utf8");
 }
@@ -393,16 +407,18 @@ app.get("/api/basemap/land", asyncRoute(async (_req, res) => {
 }));
 
 app.get("/api/config", asyncRoute(async (_req, res) => {
-  const [variables, legendSemantics, variablePolarity] = await Promise.all([
+  const [variables, legendSemantics, variablePolarity, variableCoverage] = await Promise.all([
     getVariablesConfig(),
     getLegendSemanticsConfig(),
     getVariablePolarityConfig(),
+    getVariableCoverageConfig(),
   ]);
 
   res.json({
     variables,
     legendSemantics,
     variablePolarity,
+    variableCoverage,
   });
 }));
 
@@ -443,6 +459,12 @@ app.get("/api/config/legend-semantics", asyncRoute(async (_req, res) => {
 
 app.get("/api/config/variable-polarity", asyncRoute(async (_req, res) => {
   res.json(await getVariablePolarityConfig());
+}));
+
+app.get("/api/config/variable-coverage", asyncRoute(async (_req, res) => {
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json(await getVariableCoverageConfig());
 }));
 
 app.use((err, _req, res, _next) => {

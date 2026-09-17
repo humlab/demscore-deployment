@@ -664,6 +664,60 @@ JOIN demscore.variables v
 -- Runs last, so an earlier, more specific match always wins.
 ON CONFLICT (variable_id) DO NOTHING;
 
+-- REPDEM documents most of its indicators once per source sub-dataset — the basic
+-- collection and the WECEE (Western, Central and Eastern Europe) one — under the
+-- same codebook title, and unlike QoG's OECD twins the two carry genuinely
+-- different values, so both belong in the variable list. The list row shows only
+-- the title, so without this the reader gets two rows reading "Cabinet seat share"
+-- and has to open the hover card to learn which is which. Suffix the title with
+-- the part of the dataset tag that actually varies: 'repdem_basic' -> "(basic)",
+-- 'repdem_wecee' -> "(wecee)", 'qog_oecd_ts' -> "(oecd)". Driven by the collision
+-- rather than by a list of tags, so it says nothing where a title is already
+-- unique — V-Dem has one tag and is left untouched throughout.
+WITH labelled AS (
+  SELECT
+    variable_id,
+    dataset,
+    title,
+    NULLIF(
+      regexp_replace(
+        regexp_replace(
+          COALESCE(dataset_tag, ''),
+          '^' || replace(dataset, '_', '') || '_',
+          ''
+        ),
+        '_ts$',
+        ''
+      ),
+      ''
+    ) AS tag_label
+  FROM demscore.variable_metadata
+  WHERE NULLIF(trim(title), '') IS NOT NULL
+),
+-- Only what the variable list actually offers can collide in it, so a title whose
+-- only rival is a hidden superseded variant is left plain: hiding REPDEM's wecee
+-- twins takes the "(basic)" suffixes away again without touching this rule.
+visible AS (
+  SELECT l.*
+  FROM labelled l
+  JOIN demscore.variables v ON v.id = l.variable_id
+  WHERE NOT v.hidden
+),
+ambiguous AS (
+  SELECT dataset, title
+  FROM visible
+  WHERE tag_label IS NOT NULL
+  GROUP BY dataset, title
+  HAVING count(DISTINCT tag_label) > 1
+)
+UPDATE demscore.variable_metadata vm
+SET title = l.title || ' (' || l.tag_label || ')'
+FROM visible l
+JOIN ambiguous a
+  ON a.dataset = l.dataset
+ AND a.title = l.title
+WHERE vm.variable_id = l.variable_id;
+
 ANALYZE demscore.variable_metadata;
 
 COMMIT;

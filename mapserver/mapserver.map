@@ -127,4 +127,61 @@ MAP
       END
     END
   END
+
+  # The black perimeter drawn around each run of same-coloured hexagons. It is a
+  # layer of its own rather than a style on hex_variable, so the client can ask
+  # for it by naming both layers in LAYERS and drop it by naming only the first.
+  #
+  # demscore.hex_borders holds every hexagon edge that could ever separate two
+  # colours, precomputed per mesh in sql/mapserver_hex_setup.sql; the request
+  # only has to keep the ones where the two sides landed in different classes.
+  # A country with no value for this year is absent from country_scores, so its
+  # side reads as a NULL class -- which IS DISTINCT FROM every real class, and
+  # from NULL on the far side of a coastline edge it is not, so an area that is
+  # not drawn is not outlined either.
+  #
+  # Class, not value, decides: two countries the legend paints the same shade are
+  # one area whatever their underlying numbers. Polarity only relabels the
+  # classes, so it cannot change which sides match and is not a parameter here.
+  LAYER
+    NAME "hex_outline"
+    TYPE LINE
+    STATUS ON
+    EXTENT -20037508.34 -20037508.34 20037508.34 20037508.34
+    CONNECTIONTYPE POSTGIS
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=3857"
+    PROCESSING "CLOSE_CONNECTION=DEFER"
+
+    METADATA
+      "wms_title" "Equal-Value Area Outlines"
+      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_include_items" "all"
+      "gml_include_items" "all"
+    END
+
+    VALIDATION
+      "dataset" "^(qog|repdem|v_dem)$"
+      "variable" "^[A-Za-z0-9_]+$"
+      "year" "^[0-9]{4}$"
+      "hex_size" "^[0-9]{5,7}$"
+      "default_dataset" "v_dem"
+      "default_variable" "v2x_polyarchy"
+      "default_year" "2020"
+      "default_hex_size" "200000"
+    END
+
+    CLASS
+      NAME "area outline"
+      STYLE
+        COLOR 17 17 17
+        WIDTH 1.6
+        LINECAP ROUND
+        LINEJOIN ROUND
+      END
+    END
+  END
 END

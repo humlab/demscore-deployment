@@ -22,6 +22,28 @@ The system turns tabular democracy indicator data into a thematic global hex map
    - every `u_`-prefixed CSV column is an identifier (country, year, and the various country
      code systems), not an indicator, and is excluded from the melt; excluding only the three
      read by name once let `u_vdem_country_year_country_id` and friends become variables
+   - `-11111` is Demscore's marker for an observation lost in the translation to the requested
+     unit of analysis, not a measurement, and is filtered out (`MISSING_CODE`). Loading it put
+     8402 rows of it into REPDEM, where `ntile()` classed them lowest and `AVG()` folded them
+     into the hex average, dragging the legend floor to -11111. The variables insert reads the
+     same filtered rows, so a column left with nothing — the ones whose real values are text,
+     like `cab_name`, `elecdate`, `date_in` — is never registered; the load names each one it
+     dropped
+   - a variable that is an exact subset of another in the same dataset is dropped, so QoG's
+     twelve `qog_oecd_ts_*` columns give way to their global `qog_std_ts_*` twins instead of
+     doubling the variable list under the codebook's identical titles. Redundancy is proved
+     per variable, not assumed: if a later export revises one product and not the other, the
+     load warns and keeps both
+   - REPDEM's ten `repdem_wecee_*` twins are *superseded* rather than redundant — the codebook
+     has `repdem_basic` (PAGED Basic) updated in-house for more countries, more years and more
+     variables through late-2025, while `wecee` stops at 2019/2021 — so they are marked
+     `demscore.variables.hidden` instead of deleted. The rows stay queryable and a direct WMS
+     request still renders them; they only leave the list the web client offers. Deleting would
+     be wrong: `basic` revises `wecee`'s figures (disagreeing on up to 16% of shared
+     country-years for `num_parties`) and, pooled over all years `wecee` adds no country, but
+     the map draws one year at a time and nine country-year cells sit only in `wecee` —
+     Ireland 2020 in `cab_composition2`, where `basic` carries 2025 in its place. The load
+     prints that count rather than claiming the twin adds nothing
 3. `scripts/load_variable_metadata.sh` enriches variables with codebook metadata:
    - converts each dataset `codebook.pdf` to text (`pdftotext -layout`)
    - parses entries using `scripts/extract_variable_metadata.py`
@@ -34,16 +56,53 @@ The system turns tabular democracy indicator data into a thematic global hex map
      short tag, e.g. `bti_su` for `qog_std_ts_bti_su`) — the last is restricted to short tags
      naming exactly one block per dataset, since QoG documents most indicators once per unit
      and shares short tags like `fh_rol` between `qog_std_ts_*` and `qog_oecd_ts_*`
+   - a final pass disambiguates titles: where one dataset documents the same title under more
+     than one `dataset_tag`, the differing part of the tag is appended, so REPDEM's genuinely
+     distinct twins read "Cabinet seat share (basic)" and "... (wecee)" rather than twice the
+     same words. It is driven by the collision *among visible variables*, so a unique title is
+     left alone, V-Dem (one tag) is untouched, and hiding REPDEM's `wecee` twins takes the
+     `(basic)` suffixes away again without editing this rule
    - a clean run ends with `unmatched_rows = 0`; anything else is a variable the web client can
      only show as its raw key, with no hover card
-4. Country geometry is imported into `demscore.countries_src` (via `ogr2ogr` in `scripts/setup_mapserver_hex_service.sh`).
+4. Two Natural Earth layers are imported by `ogr2ogr` in `scripts/setup_mapserver_hex_service.sh`:
+   - `demscore.countries_src` from `ne_110m_admin_0_countries.geojson` — country identity
+     (name, ISO codes) and the untrimmed outline
+   - `demscore.country_units_src` from `ne_110m_admin_0_map_units.geojson` — the same
+     sovereigns split into geographic units, which is what makes overseas territories
+     separable from the mainland
 5. `sql/mapserver_hex_setup.sql`:
-   - normalizes country geometry into `demscore.countries` (4326 + 3857)
+   - normalizes country geometry into `demscore.countries` (4326 + 3857), taking identity
+     from `countries_src` and geometry from the map units dissolved per `adm0_a3`, minus
+     overseas units — one that carries its own ISO code while its sovereign is drawn as
+     several units (French Guiana, Svalbard). Without this a country's hexagons land on
+     territories an ocean away; with it, France is metropolitan France plus Corsica.
+     Sovereigns drawn as a single unit are always kept, so Western Sahara (`SAH`/`ESH`)
+     and South Sudan (`SDS`/`SSD`) survive despite `adm0_a3` differing from their ISO code.
    - remaps `demscore.dataset_values.country_id` to the current country table (ISO3 first, then name fallback)
    - precomputes hex meshes into `demscore.hex_mesh` for supported hex sizes
+   - precomputes `demscore.hex_borders`, one row per mesh per pair of neighbouring countries
+     (and one per country for the edges facing nothing), holding the hexagon edges between
+     them. Every other edge sits between two hexagons of the same country, can never separate
+     two colours, and is dropped. Dataset, variable and year do not enter into it, so the
+     render-time cost of an outline is a filter rather than a dissolve
    - defines `demscore.hex_variable(...)` to join precomputed hex geometry with selected dataset values and compute quantile classes
 6. MapServer layer `hex_variable` calls `demscore.hex_variable(...)` dynamically using WMS params and applies bbox filtering inside the SQL subquery.
-7. Leaflet UI sends WMS requests with `dataset`, `variable`, `year`, and `hex_size`.
+   Layer `hex_outline` draws the black perimeter around each *area* of one colour — a run of
+   touching hexagons in the same class, so two neighbouring countries the legend paints the
+   same shade are one area — by keeping the `hex_borders` rows whose two sides fall in
+   different classes. A country absent from `country_scores` reads as a NULL class, so an area
+   that is not drawn is not outlined either. The client asks for it by naming both layers.
+7. `scripts/build_variable_coverage.sh` precomputes `webapp/config/variable_coverage.json`:
+   - reads per-variable, per-year country counts once
+   - buckets them onto one shared year axis per dataset (~40 bars), so two rows in
+     the same list are read against the same scale
+   - each bar is one digit `0`-`9`: `0` is no data, and `1`-`9` scale how much data
+     sits in that window — missing years and thin country coverage both pull it down
+   - the variable list draws a strip under every row at once, so it cannot afford the
+     live per-year aggregate the map's own timeline runs for the one selected variable
+   - the same data backs the COVERAGE block at the foot of the variable hover card,
+     which adds the axis years and an explanation the row itself has no room for
+8. Leaflet UI sends WMS requests with `dataset`, `variable`, `year`, and `hex_size`.
 
 ## 3) Tech Stack
 
@@ -63,13 +122,20 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `scripts/extract_variable_metadata.py`: robust parser for codebook text blocks and variable metadata fields
 - `scripts/load_variable_metadata.sh`: PDF-to-DB metadata load pipeline for variable titles/citations/descriptions
 - `scripts/setup_mapserver_hex_service.sh`: full environment + geometry + SQL setup + smoke tests
+- `scripts/build_variable_coverage.sh`: precomputes the variable list's coverage strips
+  into `webapp/config/variable_coverage.json` (run by the setup script; rerun it after
+  any load that changes which years or countries a variable covers)
 - `sql/mapserver_hex_setup.sql`: core DB objects and hex function
 - `mapserver/mapserver.map`: WMS config and style classes
 - `mapserver/README.md`: WMS parameter contract
 - `webapp/index.html`, `webapp/app.js`, `webapp/styles.css`: UI
 - `webapp/config/variables.json`: dataset defaults and allowed variables
+- `webapp/config/variable_coverage.json`: generated coverage strips, served as
+  `/api/config/variable-coverage`
 - `mapcache/nginx.conf`: optional reverse-proxy tile cache in front of MapServer
 - `data/`: input datasets + reference boundaries
+- `data/reference/`: Natural Earth boundaries — `ne_110m_admin_0_countries.geojson`
+  (identity + web-backend land basemap) and `ne_110m_admin_0_map_units.geojson` (hex geometry)
 
 ## 5) Runtime Interfaces
 
@@ -82,12 +148,13 @@ The system turns tabular democracy indicator data into a thematic global hex map
 
 ### WMS parameter contract
 
-Accepted parameters for `hex_variable`:
+Accepted parameters for `hex_variable` and `hex_outline`:
 
 - `dataset`: `qog` | `repdem` | `v_dem`
 - `variable`: alphanumeric/underscore (`^[A-Za-z0-9_]+$`)
 - `year`: four digits
 - `hex_size`: 5-7 digit integer
+- `polarity`: `positive` | `negative`, read by `hex_variable` only
 
 MapServer applies validation defaults; SQL additionally clamps:
 
@@ -131,7 +198,14 @@ Set cache toggle in `.env`:
 - `demscore.variable_metadata` is the UI-facing dictionary layer (human titles, citations, descriptions, provenance).
 - `demscore.variable_metadata_raw` is a refreshable staging table for parsed codebook output.
 - `demscore.hex_mesh` stores precomputed geometry for `hex_size` values 40000..600000 (step 10000).
+- `demscore.hex_borders` is derived from `demscore.hex_mesh` and is rebuilt with it. It matches
+  the two sides of an edge by exact geometry, which holds because `ST_HexagonGrid` makes every
+  country's mesh part of one global grid; a change that gave countries their own grids would
+  silently leave every hexagon outlined on its own.
 - Preserve join quality in `hex_variable`: ISO3 matching is primary; name matching is fallback.
+- `webapp/config/variable_coverage.json` is derived from `demscore.dataset_values`. It is a
+  build artifact, not a source of truth, and goes stale silently: rerun
+  `scripts/build_variable_coverage.sh` after any reload.
 - If changing numeric parsing logic, test null/invalid values explicitly.
 
 ### Map rendering changes
@@ -163,7 +237,15 @@ Before merging changes:
 - Source CSV fields are imported as text in transient staging tables; numeric conversion is done during ingest into `demscore.dataset_values`.
 - Codebook PDFs are semi-structured; metadata extraction is heuristic by design. Keep parser stop markers and label handling conservative.
 - Country matching can miss rows if ISO/name values drift from Natural Earth naming.
+- The two Natural Earth layers are joined on `adm0_a3` and currently agree exactly (177 each).
+  A country present in `countries_src` but absent from the map units keeps its untrimmed
+  outline rather than disappearing.
+- The land basemap deliberately keeps overseas territories: they are real land, they just
+  must not inherit the sovereign's indicator value.
 - Precomputing `hex_mesh` across all supported sizes increases setup time and storage footprint.
+- Coverage strips are normalized against the busiest year in their own dataset, so bar
+  heights compare rows within a dataset and mean nothing across datasets — RepDem's
+  fullest year reaches 32 countries where V-Dem's reaches 165.
 - Dynamic SQL surface is partially constrained by MapServer regex validation; keep validation strict.
 - No automated test suite currently exists; scripts provide operational smoke tests only.
 
