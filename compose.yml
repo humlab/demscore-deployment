@@ -4,7 +4,7 @@ services:
     container_name: demscore-router
     depends_on:
       - web
-      - mapserver
+      - mapcache
       - web-backend
     ports:
       - "8090:80"
@@ -65,6 +65,7 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:-demscore}
       CONFIG_DIR: /app/webapp-config
       REFERENCE_DATA_DIR: /app/reference-data
+      DEMSCORE_ENABLE_MAPCACHE: ${DEMSCORE_ENABLE_MAPCACHE:-0}
     working_dir: /app
     command: sh -lc "npm install --no-audit --no-fund && npm run start"
     volumes:
@@ -86,11 +87,22 @@ services:
   mapcache:
     image: nginx:1.27-alpine
     container_name: demscore-mapcache
-    profiles: ["cache"]
     depends_on:
       - mapserver
+    environment:
+      DEMSCORE_ENABLE_MAPCACHE: ${DEMSCORE_ENABLE_MAPCACHE:-0}
+    command: |
+      sh -lc 'case "${DEMSCORE_ENABLE_MAPCACHE:-0}" in
+        1|true|TRUE|yes|YES|on|ON)
+          cp /etc/demscore-mapcache/cache-enabled.conf /etc/nginx/nginx.conf
+          ;;
+        *)
+          cp /etc/demscore-mapcache/cache-disabled.conf /etc/nginx/nginx.conf
+          ;;
+      esac
+      nginx -g "daemon off;"'
     volumes:
-      - ./mapcache/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./mapcache:/etc/demscore-mapcache:ro
       - mapcache_data:/var/cache/nginx
     restart: unless-stopped
 

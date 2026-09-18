@@ -31,7 +31,7 @@ Pass these as WMS request parameters:
 - `dataset`: `qog` | `repdem` | `v_dem`
 - `variable`: column name in the selected dataset
 - `year`: 4-digit year
-- `hex_size`: hexagon edge size in Equal Earth meters; local setup precomputes `20000` to `300000` in `5000` meter steps, and the web app uses `100000`, `60000`, `40000`, and `25000` as zoom-responsive stops
+- `hex_size`: hexagon edge size in Equal Earth meters; local setup precomputes `20000` to `300000` in `5000` meter steps, and the web app uses `200000`, `100000`, and `50000` as zoom-responsive stops (the Mercator mesh uses double each, so `400000`, `200000`, `100000`). Three stops rather than a finer ladder because `hex_size` is a WMS dimension: crossing a stop invalidates every tile on screen, so each one is a full reload. The coarsest stop is also the mapfile default below and what `scripts/preload_mapcache_tiles.sh` warms; the three move together.
 - `polarity`: `positive` | `negative` | `neutral` (`positive` flips class colors so higher values are bluer; `neutral` uses a single-hue green ramp); read by `hex_variable` only
 
 Defaults:
@@ -39,19 +39,19 @@ Defaults:
 - `dataset=v_dem`
 - `variable=v2x_polyarchy`
 - `year=2020`
-- `hex_size=100000`
+- `hex_size=200000` (`400000` on the Mercator layers)
 - `polarity=negative`
 
 ## Capabilities URL
 
-`http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map&SERVICE=WMS&REQUEST=GetCapabilities`
+`http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&REQUEST=GetCapabilities`
 
-Optional cached endpoint (when `mapcache` profile is running):
+The app always uses the same `/mapserver` route. With `DEMSCORE_ENABLE_MAPCACHE=1`, that route stores `GetMap` tile responses in the server-side nginx cache and returns cacheable HTTP headers; with it disabled, the same route is a no-store pass-through for development.
 
-`http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map&SERVICE=WMS&REQUEST=GetCapabilities`
+For direct container-to-container debugging, MapServer itself is still addressed internally as `http://mapserver/?map=/etc/mapserver/mapserver.map`.
 
 ## Example GetMap URL
 
 The whole world, requested the way the web app requests it (WMS 1.1.1 and `SRS`, which sidesteps 1.3.0's axis-order rules):
 
-`http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000&polarity=positive`
+`http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000&polarity=positive`

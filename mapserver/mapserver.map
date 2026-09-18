@@ -20,7 +20,7 @@ MAP
       "ows_enable_request" "*"
       "wms_title" "Demscore Hexagons"
       "wms_abstract" "Hexagon thematic map from Demscore variables in PostGIS"
-      "wms_onlineresource" "http://localhost:8088/?map=/etc/mapserver/mapserver.map"
+      "wms_onlineresource" "http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map"
       # Both planes the service can draw in. Each layer narrows this to the one
       # its mesh was cut in: a mesh reprojected into the other plane is no longer
       # made of hexagons, which is the whole reason there are two meshes.
@@ -60,7 +60,7 @@ MAP
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
-      "default_hex_size" "100000"
+      "default_hex_size" "200000"
       "default_polarity" "negative"
     END
 
@@ -110,7 +110,7 @@ MAP
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
-      "default_hex_size" "100000"
+      "default_hex_size" "200000"
     END
 
     CLASS
@@ -167,7 +167,7 @@ MAP
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
-      "default_hex_size" "200000"
+      "default_hex_size" "400000"
       "default_polarity" "negative"
     END
 
@@ -202,7 +202,7 @@ MAP
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
-      "default_hex_size" "200000"
+      "default_hex_size" "400000"
     END
 
     CLASS

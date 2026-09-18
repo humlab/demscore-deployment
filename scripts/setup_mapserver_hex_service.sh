@@ -109,13 +109,13 @@ cat <<'EOF'
 Setup complete.
 
 Example GetMap request:
-http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000
+http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000
 
 Web app:
 http://127.0.0.1:8090/
 
-Optional cache proxy:
+WMS tile caching:
 Set DEMSCORE_ENABLE_MAPCACHE=1 in .env, then run this script.
-WMS via cache: http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map
-Web app (uses cache automatically when enabled): http://127.0.0.1:8090/
+WMS via app route: http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map
+Web app: http://127.0.0.1:8090/
 EOF

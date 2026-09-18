@@ -9,6 +9,7 @@ const CONFIG_DIR = process.env.CONFIG_DIR || path.join(__dirname, "webapp-config
 const REFERENCE_DATA_DIR = process.env.REFERENCE_DATA_DIR || path.join(__dirname, "..", "data", "reference");
 const LAND_BASEMAP_FILE = "ne_110m_admin_0_countries.geojson";
 const WMS_BASE_PATH = "/mapserver?map=/etc/mapserver/mapserver.map";
+const CACHE_ENABLED = isTruthy(process.env.DEMSCORE_ENABLE_MAPCACHE || "0");
 
 const DATASET_META = {
   qog: {
@@ -59,6 +60,10 @@ const pool = new Pool({
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+function isTruthy(value) {
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
 
 function asyncRoute(handler) {
   return (req, res, next) => {
@@ -462,6 +467,7 @@ app.get("/healthz", asyncRoute(async (_req, res) => {
 
 app.get("/api/runtime", asyncRoute(async (_req, res) => {
   res.json({
+    cacheEnabled: CACHE_ENABLED,
     mapServerBase: WMS_BASE_PATH,
   });
 }));

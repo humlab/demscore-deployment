@@ -116,7 +116,7 @@ The system turns tabular democracy indicator data into a thematic global hex map
 
 ## 4) Repository Map
 
-- `compose.yml`: service definitions, ports, mounts, optional cache profile
+- `compose.yml`: service definitions, ports, mounts, cache toggle wiring
 - `initdb/01_extensions.sql`: bootstrap PostGIS extensions
 - `scripts/load_demscore_module_vars.sh`: CSV-to-table loader
 - `scripts/dev_up.sh`: starts core services and conditionally includes `mapcache` based on `.env`
@@ -147,7 +147,9 @@ The system turns tabular democracy indicator data into a thematic global hex map
   badly — five themes match nothing here, seven variables land in no theme at all (including
   four of the five V-Dem democracy indices, since there is no Democracy theme), and all eleven
   REPDEM variables collapse into one. `topic_classification.wip.md` has the counts and method
-- `mapcache/nginx.conf`: optional reverse-proxy tile cache in front of MapServer
+- `mapcache/cache-enabled.conf`, `mapcache/cache-disabled.conf`: reverse-proxy WMS gateway
+  configs; the same `/mapserver` route passes through or caches tiles based on
+  `DEMSCORE_ENABLE_MAPCACHE`
 - `data/`: input datasets + reference boundaries
 - `data/reference/`: Natural Earth boundaries — `ne_110m_admin_0_countries.geojson`
   (identity + web-backend land basemap) and `ne_110m_admin_0_map_units.geojson` (hex geometry)
@@ -157,8 +159,9 @@ The system turns tabular democracy indicator data into a thematic global hex map
 ### Service endpoints
 
 - Web app: `http://127.0.0.1:8090`
-- MapServer WMS: `http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map`
-- Optional cached WMS: `http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map` (set `DEMSCORE_ENABLE_MAPCACHE=1` in `.env`, then run `./scripts/setup_mapserver_hex_service.sh`)
+- MapServer WMS via router/cache gateway: `http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map`
+- Server-side tile caching: set `DEMSCORE_ENABLE_MAPCACHE=1` in `.env`; with `0`,
+  the same route is a no-store pass-through for development
 - PostgreSQL: `127.0.0.1:5532` (db/user/password default: `demscore`)
 
 ### Web backend endpoints
@@ -201,8 +204,8 @@ cut in — see the note above `hex_variable_mercator` in the mapfile.
 ### Typical startup
 
 Set cache toggle in `.env`:
-- `DEMSCORE_ENABLE_MAPCACHE=0` (no cache)
-- `DEMSCORE_ENABLE_MAPCACHE=1` (enable cache proxy)
+- `DEMSCORE_ENABLE_MAPCACHE=0` (no server/browser tile cache)
+- `DEMSCORE_ENABLE_MAPCACHE=1` (enable server/browser tile cache)
 
 1. Start services:
    - `./scripts/dev_up.sh`

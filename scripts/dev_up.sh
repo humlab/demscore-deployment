@@ -23,12 +23,11 @@ is_truthy() {
   esac
 }
 
-services=(db mapserver web-backend web router)
+services=(db mapserver web-backend web mapcache router)
 if is_truthy "${DEMSCORE_ENABLE_MAPCACHE:-0}"; then
-  services+=(mapcache)
-  echo "Starting services with mapcache enabled (DEMSCORE_ENABLE_MAPCACHE=1)..."
+  echo "Starting services with WMS tile caching enabled (DEMSCORE_ENABLE_MAPCACHE=1)..."
 else
-  echo "Starting services with mapcache disabled..."
+  echo "Starting services with WMS tile caching disabled..."
 fi
 
 # Remove any stopped containers that would block recreation (e.g. stale named containers).

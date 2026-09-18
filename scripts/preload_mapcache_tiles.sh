@@ -25,7 +25,7 @@ Options:
   --zoom-max N           Maximum zoom level to warm (default: 4)
   --tile-size N          WMS tile WIDTH/HEIGHT in pixels (default: 512)
   --hex-size N           hex_size WMS parameter (default: the projection's world
-                         stop, 100000 in Equal Earth and 200000 in Mercator)
+                         stop, 200000 in Equal Earth and 400000 in Mercator)
   --latest-year-only     Warm only each variable's latest available year
   --dataset LIST         Comma-separated dataset filter (e.g. qog,repdem)
   --max-requests N       Stop after N requests (for smoke testing)
@@ -33,7 +33,7 @@ Options:
   -h, --help             Show this help
 
 Environment knobs:
-  MAPCACHE_BASE_URL      Default: http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map
+  MAPCACHE_BASE_URL      Default: http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map
   PGUSER                 Default: demscore
   PGDATABASE             Default: demscore
 USAGE
@@ -121,7 +121,7 @@ if ! podman compose ps --format '{{.Service}}\t{{.State}}' 2>/dev/null | awk -F'
   exit 1
 fi
 
-MAPCACHE_BASE_URL="${MAPCACHE_BASE_URL:-http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map}"
+MAPCACHE_BASE_URL="${MAPCACHE_BASE_URL:-http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map}"
 PGUSER="${PGUSER:-demscore}"
 PGDATABASE="${PGDATABASE:-demscore}"
 
@@ -161,7 +161,10 @@ case "$PROJECTION" in
     WORLD_HALF_Y=8392927.598466456
     WORLD_SRS="EPSG:8857"
     FILL_LAYER="hex_variable"
-    DEFAULT_HEX_SIZE=100000
+    # The coarsest stop in the web app's ladder -- see HEX_ZOOM_THRESHOLDS in
+    # webapp/src/core/projection.js. Warming any other size warms tiles the app
+    # does not ask for at the world view.
+    DEFAULT_HEX_SIZE=200000
     ;;
   mercator)
     WORLD_HALF_X=20037508.342789244
@@ -170,7 +173,7 @@ case "$PROJECTION" in
     FILL_LAYER="hex_variable_mercator"
     # Twice the Equal Earth stop, which is what makes the two the same grain --
     # see sql/mapserver_hex_mercator.sql.
-    DEFAULT_HEX_SIZE=200000
+    DEFAULT_HEX_SIZE=400000
     ;;
   *)
     echo "Unknown projection: $PROJECTION (expected equalearth or mercator)" >&2
