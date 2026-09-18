@@ -102,7 +102,8 @@ The system turns tabular democracy indicator data into a thematic global hex map
      live per-year aggregate the map's own timeline runs for the one selected variable
    - the same data backs the COVERAGE block at the foot of the variable hover card,
      which adds the axis years and an explanation the row itself has no room for
-8. The map UI sends WMS requests with `dataset`, `variable`, `year`, `hex_size` and `clip`.
+8. The map UI sends WMS requests with `dataset`, `variable`, `year` and `hex_size`, naming
+   the layer pair that belongs to the projection it is drawing in.
 
 ## 3) Tech Stack
 
@@ -182,15 +183,12 @@ MapServer applies validation defaults; SQL additionally clamps:
 - year: `1500..2100`
 - hex size: `20000..300000` meters (Equal Earth metres, so the same real area anywhere)
 
-Advertised CRS: `EPSG:4326`, `EPSG:8857` and `EPSG:3857`. The web app asks for `EPSG:8857`
-with WMS 1.1.1 (`SRS`, not `CRS`), which sidesteps 1.3.0's axis-order rules, and for
-`EPSG:3857` when the projection toggle is on Mercator.
-
-`clip` (`none` | `mercator`, default `none`) drops the cells Web Mercator cannot draw: those
-reaching past 85.05N/S, which reproject to five worlds tall, and the nine in the 100km mesh
-that straddle the antimeridian, which PROJ wraps into bands across the whole map. Its two
-tests are written so the planner folds them away when `clip` is `none`, which is every
-request the default Equal Earth view makes.
+Advertised CRS: `EPSG:4326`, `EPSG:8857` and `EPSG:3857`, with WMS 1.1.1 (`SRS`, not `CRS`),
+which sidesteps 1.3.0's axis-order rules. Each layer narrows that to the one plane its mesh
+was cut in: `hex_variable` / `hex_outline` serve `EPSG:8857` and
+`hex_variable_mercator` / `hex_outline_mercator` serve `EPSG:3857`. A layer is never
+reprojected into the other plane, because a hexagon is a hexagon only in the plane it was
+cut in — see the note above `hex_variable_mercator` in the mapfile.
 
 ## 6) Local Setup and Operations
 
@@ -237,10 +235,18 @@ Set cache toggle in `.env`:
   the map, which is the only reading under which a hexagon count means anything; Web
   Mercator scaled area by sec^2(latitude) and the mesh inherited it, so Russia carried
   795 hexagons across 17.0M km2 while Brazil carried 85 across 8.5M.
-  - the mesh is only ever *generated* in 8857. `EPSG:3857` is advertised so the web app can
-    offer Mercator beside Equal Earth, and MapServer reprojects the same equal-area mesh on
-    the way out; the cells visibly swell towards the poles, which is the whole point of
-    being able to look. Nothing upstream of the WMS response knows Mercator exists.
+  - there is a second mesh, `demscore.hex_mesh_mercator`, cut in EPSG:3857 by
+    `sql/mapserver_hex_mercator.sql`, and the web app's projection toggle switches to it.
+    It is a second mesh and not the first one reprojected: a hexagon is a hexagon only in
+    the plane it was cut in, and an Equal Earth cell pushed into Mercator is drawn twice as
+    tall as it is wide by 60N and as a sliver by 80N. What the toggle compares is what a
+    cell *means* — a fixed amount of ground against a fixed amount of screen — so the
+    Mercator mesh is the old distortion on purpose, kept alongside rather than in place of
+    the real one. Its size ladder is 40k-600k step 10k, exactly twice the Equal Earth one,
+    which is what makes the two the same grain: Mercator 200k gives 5 917 cells against
+    Equal Earth 100k's 5 690.
+  - `demscore.countries.geom_3857` *is* clipped at `+/-85.05112878`, for the same reason
+    `geom_8857` is not: that latitude is where Web Mercator's y runs off to infinity.
   - the size ladder is deliberately half the old Mercator one. A Mercator hexagon covered
     ground area proportional to cos^2(latitude), so the old sizes were counting on a
     surplus of hexagons near the poles; halved, the meshes land within 4% of the old

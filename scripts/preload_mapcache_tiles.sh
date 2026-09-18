@@ -19,10 +19,13 @@ Usage: ./scripts/preload_mapcache_tiles.sh [options]
 Preload mapcache with WMS GetMap tile requests for demscore hex layers.
 
 Options:
-  --zoom-min N           Minimum Leaflet zoom level to warm (default: 1)
-  --zoom-max N           Maximum Leaflet zoom level to warm (default: 4)
+  --projection NAME      equalearth (default) or mercator. Each has a mesh and a
+                         tile grid of its own, so each needs its own warm-up run
+  --zoom-min N           Minimum zoom level to warm (default: 1)
+  --zoom-max N           Maximum zoom level to warm (default: 4)
   --tile-size N          WMS tile WIDTH/HEIGHT in pixels (default: 512)
-  --hex-size N           hex_size WMS parameter (default: 100000)
+  --hex-size N           hex_size WMS parameter (default: the projection's world
+                         stop, 100000 in Equal Earth and 200000 in Mercator)
   --latest-year-only     Warm only each variable's latest available year
   --dataset LIST         Comma-separated dataset filter (e.g. qog,repdem)
   --max-requests N       Stop after N requests (for smoke testing)
@@ -46,7 +49,8 @@ is_truthy() {
 ZOOM_MIN=1
 ZOOM_MAX=4
 TILE_SIZE=512
-HEX_SIZE=100000
+PROJECTION=equalearth
+HEX_SIZE=""
 LATEST_YEAR_ONLY=0
 DATASET_FILTER=""
 MAX_REQUESTS=0
@@ -62,6 +66,8 @@ while [[ $# -gt 0 ]]; do
       TILE_SIZE="$2"; shift 2 ;;
     --hex-size)
       HEX_SIZE="$2"; shift 2 ;;
+    --projection)
+      PROJECTION="$2"; shift 2 ;;
     --latest-year-only)
       LATEST_YEAR_ONLY=1; shift ;;
     --dataset)
@@ -79,7 +85,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$ZOOM_MIN" =~ ^[0-9]+$ && "$ZOOM_MAX" =~ ^[0-9]+$ && "$TILE_SIZE" =~ ^[0-9]+$ && "$HEX_SIZE" =~ ^[0-9]+$ && "$MAX_REQUESTS" =~ ^[0-9]+$ ]]; then
+if ! [[ "$ZOOM_MIN" =~ ^[0-9]+$ && "$ZOOM_MAX" =~ ^[0-9]+$ && "$TILE_SIZE" =~ ^[0-9]+$ && "$MAX_REQUESTS" =~ ^[0-9]+$ ]]; then
   echo "Numeric options must be non-negative integers." >&2
   exit 1
 fi
@@ -141,15 +147,43 @@ else
   QUERY_JOIN="&"
 fi
 
-# Equal Earth (EPSG:8857). The world is not a square the way Web Mercator's was:
-# it is widest on the equator at +/-17243959.06 and reaches only +/-8392927.60
-# north-south, a 2.055:1 box. Tile rows and columns are therefore counted
-# separately from the world's real size rather than assumed to be 2^z of each.
-EQUAL_EARTH_HALF_X=17243959.06221695
-EQUAL_EARTH_HALF_Y=8392927.598466456
-# The Web Mercator resolution ladder, kept deliberately: the web app pins its
-# CRS to these same metres-per-pixel so a zoom level means the same scale it
-# always did, and only the shape of the world underneath it changed.
+# One world box, one mesh and one set of layers per projection, because the two
+# meshes are cut in different planes and share no tile.
+#
+# Equal Earth's world is not a square the way Web Mercator's is: it is widest on
+# the equator at +/-17243959.06 and reaches only +/-8392927.60 north-south, a
+# 2.055:1 box. Tile rows and columns are therefore counted separately from the
+# world's real size rather than assumed to be 2^z of each -- which is also why
+# this works unchanged for the square one.
+case "$PROJECTION" in
+  equalearth)
+    WORLD_HALF_X=17243959.06221695
+    WORLD_HALF_Y=8392927.598466456
+    WORLD_SRS="EPSG:8857"
+    FILL_LAYER="hex_variable"
+    DEFAULT_HEX_SIZE=100000
+    ;;
+  mercator)
+    WORLD_HALF_X=20037508.342789244
+    WORLD_HALF_Y=20037508.342789244
+    WORLD_SRS="EPSG:3857"
+    FILL_LAYER="hex_variable_mercator"
+    # Twice the Equal Earth stop, which is what makes the two the same grain --
+    # see sql/mapserver_hex_mercator.sql.
+    DEFAULT_HEX_SIZE=200000
+    ;;
+  *)
+    echo "Unknown projection: $PROJECTION (expected equalearth or mercator)" >&2
+    exit 1 ;;
+esac
+HEX_SIZE="${HEX_SIZE:-$DEFAULT_HEX_SIZE}"
+if ! [[ "$HEX_SIZE" =~ ^[0-9]+$ ]]; then
+  echo "--hex-size must be a non-negative integer." >&2
+  exit 1
+fi
+# The Web Mercator resolution ladder, which both projections use: the web app
+# pins its zoom to these same metres-per-pixel so a zoom level means one scale
+# whichever world is underneath it.
 ZOOM_ZERO_RESOLUTION=156543.03392804097
 
 TMP_DIR="$(mktemp -d)"
@@ -163,7 +197,7 @@ build_tiles() {
   : > "$TILES_FILE"
   local z
   for (( z=ZOOM_MIN; z<=ZOOM_MAX; z++ )); do
-    awk -v hx="$EQUAL_EARTH_HALF_X" -v hy="$EQUAL_EARTH_HALF_Y" \
+    awk -v hx="$WORLD_HALF_X" -v hy="$WORLD_HALF_Y" \
         -v r0="$ZOOM_ZERO_RESOLUTION" -v ts="$TILE_SIZE" -v z="$z" 'BEGIN {
       span = (r0 / (2 ^ z)) * ts;          # metres covered by one tile edge
       nx = int((2 * hx) / span); if (nx * span < 2 * hx) nx++;
@@ -255,7 +289,7 @@ while IFS=$'\t' read -r dataset variable year; do
     fi
     request_idx=$((request_idx + 1))
 
-    url="${MAPCACHE_BASE_URL}${QUERY_JOIN}SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:8857&BBOX=${xmin},${ymin},${xmax},${ymax}&WIDTH=${TILE_SIZE}&HEIGHT=${TILE_SIZE}&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=${HEX_SIZE}"
+    url="${MAPCACHE_BASE_URL}${QUERY_JOIN}SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${FILL_LAYER}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=${WORLD_SRS}&BBOX=${xmin},${ymin},${xmax},${ymax}&WIDTH=${TILE_SIZE}&HEIGHT=${TILE_SIZE}&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=${HEX_SIZE}"
 
     if (( DRY_RUN == 1 )); then
       if (( request_idx <= 20 )); then

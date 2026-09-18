@@ -68,6 +68,12 @@ echo "Creating normalized map tables, precomputed hex meshes, and map function..
 echo "This step expects dataset values to be loaded first via scripts/load_demscore_module_vars.sh"
 podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f - < "${ROOT_DIR}/sql/mapserver_hex_setup.sql"
 
+# The second mesh, cut in Web Mercator, for the projection toggle. A hexagon is
+# only a hexagon in the plane it was cut in, so the comparison view cannot reuse
+# the Equal Earth mesh -- see the note at the top of the file.
+echo "Building the Web Mercator hex mesh for the projection toggle..."
+podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f - < "${ROOT_DIR}/sql/mapserver_hex_mercator.sql"
+
 echo "Validating map function outputs..."
 podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -c "
 SELECT
