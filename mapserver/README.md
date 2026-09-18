@@ -4,7 +4,9 @@ This directory contains a file-configured MapServer WMS setup for rendering hexa
 
 ## Projection
 
-Everything is served in **EPSG:8857, Equal Earth**, which is also the projection the hex mesh is generated in. One hexagon is therefore one real area anywhere on the map. `EPSG:4326` is advertised as well and MapServer will reproject into it; there is no Web Mercator anywhere in the stack.
+Everything is *generated* in **EPSG:8857, Equal Earth**, which is what makes one hexagon one real area anywhere on the map, and that is what the web app asks for by default. `EPSG:4326` and `EPSG:3857` are advertised as well and MapServer reprojects into them on the way out; the mesh itself is never anything but equal-area.
+
+A Mercator request should carry `clip=mercator`, which drops the cells that projection cannot draw — those reaching past 85.05N/S, and the handful straddling the antimeridian. Without it they are rendered as columns standing over the map and bands across it. The default is `clip=none` and it costs the Equal Earth path nothing: the tests are constant-folded away.
 
 The world box is `-17243960 -8392928 17243960 8392928`. Do not derive that by transforming the `(-180,-90)` and `(180,90)` corners: Equal Earth is at its widest on the equator, where x reaches `+/-17243959`, and narrows to `+/-10216474` at the poles, so a corner-derived extent is 41% too narrow.
 

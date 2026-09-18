@@ -21,13 +21,36 @@ MAP
       "wms_title" "Demscore Hexagons"
       "wms_abstract" "Hexagon thematic map from Demscore variables in PostGIS"
       "wms_onlineresource" "http://localhost:8088/?map=/etc/mapserver/mapserver.map"
-      "wms_srs" "EPSG:4326 EPSG:8857"
+      # EPSG:3857 is advertised so the web app can offer a Mercator view beside
+      # the Equal Earth one. MapServer reprojects the mesh on the way out; the
+      # mesh itself stays equal-area, which is exactly what makes the comparison
+      # worth offering -- the cells visibly swell towards the poles.
+      "wms_srs" "EPSG:4326 EPSG:8857 EPSG:3857"
       "wms_allow_getmap_without_styles" "true"
       "wms_feature_info_mime_type" "text/plain"
       "wms_keywordlist" "demscore,hexagons,postgis"
     END
   END
 
+  # `clip=mercator` drops the cells Web Mercator cannot draw, and nothing else
+  # does; the default is `none` and Equal Earth never sends it.
+  #
+  # Two kinds of cell are impossible there, and the mesh has both because it was
+  # cut in an equal-area plane that has neither problem:
+  #
+  #   * cells reaching past 85.05N/S. Mercator puts the pole at infinity, so a
+  #     hexagon touching 90N reprojects to y = 106338076 -- five worlds tall --
+  #     and is drawn as a column standing over the whole map. 8346231 is the
+  #     Equal Earth y of that latitude, and y there depends on latitude alone,
+  #     so the test is a plain comparison rather than a reprojection.
+  #   * cells straddling the antimeridian. PROJ wraps their longitudes, so a
+  #     hexagon in Chukotka comes back spanning 179E to 179W and is drawn as a
+  #     band across the entire world. Nine do this in the 100km mesh. The test
+  #     is that no cell honestly spans half the globe.
+  #
+  # Both tests are written so the planner folds them away when clip is `none`:
+  # the string comparison is constant, so the transforms are never run in the
+  # Equal Earth path that serves every default request.
   LAYER
     NAME "hex_variable"
     TYPE POLYGON
@@ -38,12 +61,12 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!) AND ('%clip%' <> 'mercator' OR (ST_YMax(hm.geom) <= 8346231 AND ST_YMin(hm.geom) >= -8346231 AND ST_XMax(ST_Transform(hm.geom, 4326)) - ST_XMin(ST_Transform(hm.geom, 4326)) < 180))) AS hv USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
       "wms_title" "Dataset Variable Hexagons"
-      "wms_srs" "EPSG:4326 EPSG:8857"
+      "wms_srs" "EPSG:4326 EPSG:8857 EPSG:3857"
       "wms_include_items" "all"
       "gml_include_items" "all"
     END
@@ -54,11 +77,13 @@ MAP
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
       "polarity" "^(positive|negative|neutral)$"
+      "clip" "^(none|mercator)$"
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
       "default_hex_size" "100000"
       "default_polarity" "negative"
+      "default_clip" "none"
     END
 
     CLASS
@@ -227,12 +252,12 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!) AND ('%clip%' <> 'mercator' OR (ST_YMax(hb.geom) <= 8346231 AND ST_YMin(hb.geom) >= -8346231 AND ST_XMax(ST_Transform(hb.geom, 4326)) - ST_XMin(ST_Transform(hb.geom, 4326)) < 180))) AS ho USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
       "wms_title" "Equal-Value Area Outlines"
-      "wms_srs" "EPSG:4326 EPSG:8857"
+      "wms_srs" "EPSG:4326 EPSG:8857 EPSG:3857"
       "wms_include_items" "all"
       "gml_include_items" "all"
     END
@@ -242,10 +267,12 @@ MAP
       "variable" "^[A-Za-z0-9_]+$"
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
+      "clip" "^(none|mercator)$"
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
       "default_hex_size" "100000"
+      "default_clip" "none"
     END
 
     CLASS

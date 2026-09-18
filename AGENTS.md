@@ -8,7 +8,7 @@ Demscore is a mapping stack with an optional cache layer:
 
 1. PostGIS database (`db`) stores source datasets and geographic boundaries.
 2. MapServer (`mapserver`) exposes a WMS layer that renders data-driven hexagons.
-3. Static web app (`web`) uses Leaflet to request and display the WMS layer.
+3. Static web app (`web`) uses OpenLayers to request and display the WMS layer.
 4. Optional WMS cache proxy (`mapcache`) can sit in front of MapServer.
 
 The system turns tabular democracy indicator data into a thematic global hex map.
@@ -102,7 +102,7 @@ The system turns tabular democracy indicator data into a thematic global hex map
      live per-year aggregate the map's own timeline runs for the one selected variable
    - the same data backs the COVERAGE block at the foot of the variable hover card,
      which adds the axis years and an explanation the row itself has no room for
-8. Leaflet UI sends WMS requests with `dataset`, `variable`, `year`, and `hex_size`.
+8. The map UI sends WMS requests with `dataset`, `variable`, `year`, `hex_size` and `clip`.
 
 ## 3) Tech Stack
 
@@ -110,7 +110,7 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - Database: PostgreSQL 16 + PostGIS 3.4 (`postgis/postgis:16-3.4`)
 - Spatial server: MapServer 8.4 (`camptocamp/mapserver:8.4`)
 - Web server: Nginx 1.27 Alpine (`nginx:1.27-alpine`)
-- Frontend: Vanilla JS + Leaflet 1.9.4 + static HTML/CSS
+- Frontend: Vanilla JS + OpenLayers 10.10.0 + proj4 2.22.0 + static HTML/CSS
 - GIS import tooling: `ogr2ogr` (required by setup script)
 
 ## 4) Repository Map
@@ -182,8 +182,15 @@ MapServer applies validation defaults; SQL additionally clamps:
 - year: `1500..2100`
 - hex size: `20000..300000` meters (Equal Earth metres, so the same real area anywhere)
 
-Advertised CRS: `EPSG:4326` and `EPSG:8857`. The web app asks for `EPSG:8857` with WMS
-1.1.1 (`SRS`, not `CRS`), which sidesteps 1.3.0's axis-order rules.
+Advertised CRS: `EPSG:4326`, `EPSG:8857` and `EPSG:3857`. The web app asks for `EPSG:8857`
+with WMS 1.1.1 (`SRS`, not `CRS`), which sidesteps 1.3.0's axis-order rules, and for
+`EPSG:3857` when the projection toggle is on Mercator.
+
+`clip` (`none` | `mercator`, default `none`) drops the cells Web Mercator cannot draw: those
+reaching past 85.05N/S, which reproject to five worlds tall, and the nine in the 100km mesh
+that straddle the antimeridian, which PROJ wraps into bands across the whole map. Its two
+tests are written so the planner folds them away when `clip` is `none`, which is every
+request the default Equal Earth view makes.
 
 ## 6) Local Setup and Operations
 
@@ -229,8 +236,11 @@ Set cache toggle in `.env`:
 - Everything spatial is EPSG:8857, Equal Earth. One hexagon is one real area anywhere on
   the map, which is the only reading under which a hexagon count means anything; Web
   Mercator scaled area by sec^2(latitude) and the mesh inherited it, so Russia carried
-  795 hexagons across 17.0M km2 while Brazil carried 85 across 8.5M. There is no
-  Mercator path left in the stack and no projection toggle.
+  795 hexagons across 17.0M km2 while Brazil carried 85 across 8.5M.
+  - the mesh is only ever *generated* in 8857. `EPSG:3857` is advertised so the web app can
+    offer Mercator beside Equal Earth, and MapServer reprojects the same equal-area mesh on
+    the way out; the cells visibly swell towards the poles, which is the whole point of
+    being able to look. Nothing upstream of the WMS response knows Mercator exists.
   - the size ladder is deliberately half the old Mercator one. A Mercator hexagon covered
     ground area proportional to cos^2(latitude), so the old sizes were counting on a
     surplus of hexagons near the poles; halved, the meshes land within 4% of the old
