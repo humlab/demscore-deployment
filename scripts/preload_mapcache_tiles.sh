@@ -19,10 +19,13 @@ Usage: ./scripts/preload_mapcache_tiles.sh [options]
 Preload mapcache with WMS GetMap tile requests for demscore hex layers.
 
 Options:
-  --zoom-min N           Minimum Leaflet zoom level to warm (default: 1)
-  --zoom-max N           Maximum Leaflet zoom level to warm (default: 4)
+  --projection NAME      equalearth (default) or mercator. Each has a mesh and a
+                         tile grid of its own, so each needs its own warm-up run
+  --zoom-min N           Minimum zoom level to warm (default: 1)
+  --zoom-max N           Maximum zoom level to warm (default: 4)
   --tile-size N          WMS tile WIDTH/HEIGHT in pixels (default: 512)
-  --hex-size N           hex_size WMS parameter (default: 200000)
+  --hex-size N           hex_size WMS parameter (default: the world stop of the
+                         app's ladder, 200000 in either projection)
   --latest-year-only     Warm only each variable's latest available year
   --dataset LIST         Comma-separated dataset filter (e.g. qog,repdem)
   --max-requests N       Stop after N requests (for smoke testing)
@@ -30,7 +33,7 @@ Options:
   -h, --help             Show this help
 
 Environment knobs:
-  MAPCACHE_BASE_URL      Default: http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map
+  MAPCACHE_BASE_URL      Default: http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map
   PGUSER                 Default: demscore
   PGDATABASE             Default: demscore
 USAGE
@@ -46,7 +49,8 @@ is_truthy() {
 ZOOM_MIN=1
 ZOOM_MAX=4
 TILE_SIZE=512
-HEX_SIZE=200000
+PROJECTION=equalearth
+HEX_SIZE=""
 LATEST_YEAR_ONLY=0
 DATASET_FILTER=""
 MAX_REQUESTS=0
@@ -62,6 +66,8 @@ while [[ $# -gt 0 ]]; do
       TILE_SIZE="$2"; shift 2 ;;
     --hex-size)
       HEX_SIZE="$2"; shift 2 ;;
+    --projection)
+      PROJECTION="$2"; shift 2 ;;
     --latest-year-only)
       LATEST_YEAR_ONLY=1; shift ;;
     --dataset)
@@ -79,7 +85,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if ! [[ "$ZOOM_MIN" =~ ^[0-9]+$ && "$ZOOM_MAX" =~ ^[0-9]+$ && "$TILE_SIZE" =~ ^[0-9]+$ && "$HEX_SIZE" =~ ^[0-9]+$ && "$MAX_REQUESTS" =~ ^[0-9]+$ ]]; then
+if ! [[ "$ZOOM_MIN" =~ ^[0-9]+$ && "$ZOOM_MAX" =~ ^[0-9]+$ && "$TILE_SIZE" =~ ^[0-9]+$ && "$MAX_REQUESTS" =~ ^[0-9]+$ ]]; then
   echo "Numeric options must be non-negative integers." >&2
   exit 1
 fi
@@ -115,7 +121,7 @@ if ! podman compose ps --format '{{.Service}}\t{{.State}}' 2>/dev/null | awk -F'
   exit 1
 fi
 
-MAPCACHE_BASE_URL="${MAPCACHE_BASE_URL:-http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map}"
+MAPCACHE_BASE_URL="${MAPCACHE_BASE_URL:-http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map}"
 PGUSER="${PGUSER:-demscore}"
 PGDATABASE="${PGDATABASE:-demscore}"
 
@@ -141,7 +147,48 @@ else
   QUERY_JOIN="&"
 fi
 
-WEB_MERCATOR_HALF=20037508.342789244
+# One world box, one mesh and one set of layers per projection, because the two
+# meshes are cut in different planes and share no tile.
+#
+# Equal Earth's world is not a square the way Web Mercator's is: it is widest on
+# the equator at +/-17243959.06 and reaches only +/-8392927.60 north-south, a
+# 2.055:1 box. Tile rows and columns are therefore counted separately from the
+# world's real size rather than assumed to be 2^z of each -- which is also why
+# this works unchanged for the square one.
+case "$PROJECTION" in
+  equalearth)
+    WORLD_HALF_X=17243959.06221695
+    WORLD_HALF_Y=8392927.598466456
+    WORLD_SRS="EPSG:8857"
+    FILL_LAYER="hex_variable"
+    # The coarsest stop in the web app's ladder -- see HEX_ZOOM_THRESHOLDS in
+    # webapp/src/core/projection.js. Warming any other size warms tiles the app
+    # does not ask for at the world view.
+    DEFAULT_HEX_SIZE=200000
+    ;;
+  mercator)
+    WORLD_HALF_X=20037508.342789244
+    WORLD_HALF_Y=20037508.342789244
+    WORLD_SRS="EPSG:3857"
+    FILL_LAYER="hex_variable_mercator"
+    # The same stop as Equal Earth, deliberately: both projections count in the
+    # same resolution ladder, so an equal size is an equal grain on screen --
+    # see hexResolutionStops in webapp/src/core/projection.js.
+    DEFAULT_HEX_SIZE=200000
+    ;;
+  *)
+    echo "Unknown projection: $PROJECTION (expected equalearth or mercator)" >&2
+    exit 1 ;;
+esac
+HEX_SIZE="${HEX_SIZE:-$DEFAULT_HEX_SIZE}"
+if ! [[ "$HEX_SIZE" =~ ^[0-9]+$ ]]; then
+  echo "--hex-size must be a non-negative integer." >&2
+  exit 1
+fi
+# The Web Mercator resolution ladder, which both projections use: the web app
+# pins its zoom to these same metres-per-pixel so a zoom level means one scale
+# whichever world is underneath it.
+ZOOM_ZERO_RESOLUTION=156543.03392804097
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -152,21 +199,22 @@ FAILURES_FILE="$TMP_DIR/failures.tsv"
 
 build_tiles() {
   : > "$TILES_FILE"
-  local z n x y
+  local z
   for (( z=ZOOM_MIN; z<=ZOOM_MAX; z++ )); do
-    n=$((1 << (z - 1)))
-    for (( x=0; x<n; x++ )); do
-      for (( y=0; y<n; y++ )); do
-        awk -v m="$WEB_MERCATOR_HALF" -v n="$n" -v x="$x" -v y="$y" -v z="$z" 'BEGIN {
-          step=(2*m)/n;
-          xmin=-m + (x*step);
-          xmax=xmin + step;
-          ymax=m - (y*step);
-          ymin=ymax - step;
-          printf "%d\t%d\t%d\t%.8f\t%.8f\t%.8f\t%.8f\n", z, x, y, xmin, ymin, xmax, ymax;
-        }' >> "$TILES_FILE"
-      done
-    done
+    awk -v hx="$WORLD_HALF_X" -v hy="$WORLD_HALF_Y" \
+        -v r0="$ZOOM_ZERO_RESOLUTION" -v ts="$TILE_SIZE" -v z="$z" 'BEGIN {
+      span = (r0 / (2 ^ z)) * ts;          # metres covered by one tile edge
+      nx = int((2 * hx) / span); if (nx * span < 2 * hx) nx++;
+      ny = int((2 * hy) / span); if (ny * span < 2 * hy) ny++;
+      for (x = 0; x < nx; x++) {
+        for (y = 0; y < ny; y++) {
+          xmin = -hx + (x * span);
+          ymax =  hy - (y * span);
+          printf "%d\t%d\t%d\t%.8f\t%.8f\t%.8f\t%.8f\n", \
+            z, x, y, xmin, ymax - span, xmin + span, ymax;
+        }
+      }
+    }' >> "$TILES_FILE"
   done
 }
 
@@ -245,7 +293,7 @@ while IFS=$'\t' read -r dataset variable year; do
     fi
     request_idx=$((request_idx + 1))
 
-    url="${MAPCACHE_BASE_URL}${QUERY_JOIN}SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=EPSG:3857&BBOX=${xmin},${ymin},${xmax},${ymax}&WIDTH=${TILE_SIZE}&HEIGHT=${TILE_SIZE}&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=${HEX_SIZE}"
+    url="${MAPCACHE_BASE_URL}${QUERY_JOIN}SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${FILL_LAYER}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=${WORLD_SRS}&BBOX=${xmin},${ymin},${xmax},${ymax}&WIDTH=${TILE_SIZE}&HEIGHT=${TILE_SIZE}&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=${HEX_SIZE}"
 
     if (( DRY_RUN == 1 )); then
       if (( request_idx <= 20 )); then

@@ -6,7 +6,7 @@
 
 - Serve webapp configuration from PostgreSQL where possible.
 - Provide a stable API surface so frontend config sources are centralized.
-- Keep map rendering direct from webapp to MapServer (no proxying of WMS tile requests).
+- Provide runtime cache settings so the webapp and WMS proxy use the same `.env` toggle.
 
 ## Endpoints
 

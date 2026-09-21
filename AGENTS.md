@@ -8,7 +8,7 @@ Demscore is a mapping stack with an optional cache layer:
 
 1. PostGIS database (`db`) stores source datasets and geographic boundaries.
 2. MapServer (`mapserver`) exposes a WMS layer that renders data-driven hexagons.
-3. Static web app (`web`) uses Leaflet to request and display the WMS layer.
+3. Static web app (`web`) uses OpenLayers to request and display the WMS layer.
 4. Optional WMS cache proxy (`mapcache`) can sit in front of MapServer.
 
 The system turns tabular democracy indicator data into a thematic global hex map.
@@ -71,7 +71,7 @@ The system turns tabular democracy indicator data into a thematic global hex map
      sovereigns split into geographic units, which is what makes overseas territories
      separable from the mainland
 5. `sql/mapserver_hex_setup.sql`:
-   - normalizes country geometry into `demscore.countries` (4326 + 3857), taking identity
+   - normalizes country geometry into `demscore.countries` (4326 + 8857), taking identity
      from `countries_src` and geometry from the map units dissolved per `adm0_a3`, minus
      overseas units — one that carries its own ISO code while its sovereign is drawn as
      several units (French Guiana, Svalbard). Without this a country's hexagons land on
@@ -102,7 +102,8 @@ The system turns tabular democracy indicator data into a thematic global hex map
      live per-year aggregate the map's own timeline runs for the one selected variable
    - the same data backs the COVERAGE block at the foot of the variable hover card,
      which adds the axis years and an explanation the row itself has no room for
-8. Leaflet UI sends WMS requests with `dataset`, `variable`, `year`, and `hex_size`.
+8. The map UI sends WMS requests with `dataset`, `variable`, `year` and `hex_size`, naming
+   the layer pair that belongs to the projection it is drawing in.
 
 ## 3) Tech Stack
 
@@ -110,12 +111,12 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - Database: PostgreSQL 16 + PostGIS 3.4 (`postgis/postgis:16-3.4`)
 - Spatial server: MapServer 8.4 (`camptocamp/mapserver:8.4`)
 - Web server: Nginx 1.27 Alpine (`nginx:1.27-alpine`)
-- Frontend: Vanilla JS + Leaflet 1.9.4 + static HTML/CSS
+- Frontend: Vanilla JS + OpenLayers 10.10.0 + proj4 2.22.0 + static HTML/CSS
 - GIS import tooling: `ogr2ogr` (required by setup script)
 
 ## 4) Repository Map
 
-- `compose.yml`: service definitions, ports, mounts, optional cache profile
+- `compose.yml`: service definitions, ports, mounts, cache toggle wiring
 - `initdb/01_extensions.sql`: bootstrap PostGIS extensions
 - `scripts/load_demscore_module_vars.sh`: CSV-to-table loader
 - `scripts/dev_up.sh`: starts core services and conditionally includes `mapcache` based on `.env`,
@@ -132,10 +133,31 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `mapserver/mapserver.map`: WMS config and style classes
 - `mapserver/README.md`: WMS parameter contract
 - `webapp/index.html`, `webapp/app.js`, `webapp/styles.css`: UI
-- `webapp/config/variables.json`: dataset defaults and allowed variables
+- `webapp/config/variables.json`: dataset presentation metadata — `label`, `title`, `color`,
+  `palette` (five shades, darkest first), `codebook`, `download`, `image`, `defaultVariable`.
+  `download` is Demscore's own downloader replaying a saved *download ID*, one per module, and
+  the ID is the selection this deployment loads: its `data.csv` carries the same columns as
+  `data/Demscore_Module_Vars/<module>`. It is per-dataset because nothing finer exists — the
+  portal's variable browser (`menu_all_variables`) is a DataTables grid that reads no query
+  string, so no URL can name a variable. The variable
+  lists and year spans in it are only a fallback: `getVariablesConfig()` builds those from
+  `demscore.variables`, then `overlayDatasetPresentation()` lays this file's presentation keys
+  over the result. Before that overlay existed the database path never read the file at all, so
+  anything added here was silently ignored and `DATASET_META` in `web-backend/server.js` was the
+  real source
 - `webapp/config/variable_coverage.json`: generated coverage strips, served as
   `/api/config/variable-coverage`
-- `mapcache/nginx.conf`: optional reverse-proxy tile cache in front of MapServer
+- `webapp/config/variable_topics.json`: the curated cross-dataset topics the variable list's
+  filter chips are built from, served as `/api/config/variable-topics`. Hand-maintained, not
+  generated: the codebook section a variable sits under is dataset-scoped and, for this
+  selection, mostly one variable per section, so it seeds the grouping but cannot be it.
+  Demscore's own 13 published Thematic Datasets were tested against this selection and fit it
+  badly — five themes match nothing here, seven variables land in no theme at all (including
+  four of the five V-Dem democracy indices, since there is no Democracy theme), and all eleven
+  REPDEM variables collapse into one. `topic_classification.wip.md` has the counts and method
+- `mapcache/cache-enabled.conf`, `mapcache/cache-disabled.conf`: reverse-proxy WMS gateway
+  configs; the same `/mapserver` route passes through or caches tiles based on
+  `DEMSCORE_ENABLE_MAPCACHE`
 - `data/`: input datasets + reference boundaries
 - `data/reference/`: Natural Earth boundaries — `ne_110m_admin_0_countries.geojson`
   (identity + web-backend land basemap) and `ne_110m_admin_0_map_units.geojson` (hex geometry)
@@ -145,9 +167,17 @@ The system turns tabular democracy indicator data into a thematic global hex map
 ### Service endpoints
 
 - Web app: `http://127.0.0.1:8090`
-- MapServer WMS: `http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map`
-- Optional cached WMS: `http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map` (set `DEMSCORE_ENABLE_MAPCACHE=1` in `.env`, then run `./scripts/setup_mapserver_hex_service.sh`)
+- MapServer WMS via router/cache gateway: `http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map`
+- Server-side tile caching: set `DEMSCORE_ENABLE_MAPCACHE=1` in `.env`; with `0`,
+  the same route is a no-store pass-through for development
 - PostgreSQL: `127.0.0.1:5532` (db/user/password default: `demscore`)
+
+### Web backend endpoints
+
+Config payloads (`/api/config/*`, listed in `webapp/AGENTS.md`) are files on disk. The two
+database-backed reads are `/api/config/variables` and `/api/class-breaks`; the latter answers
+the legend's hover card with the quantile class spans for one dataset/variable/year, validated
+the same way the mapfile validates its own parameters.
 
 ### WMS parameter contract
 
@@ -157,12 +187,19 @@ Accepted parameters for `hex_variable` and `hex_outline`:
 - `variable`: alphanumeric/underscore (`^[A-Za-z0-9_]+$`)
 - `year`: four digits
 - `hex_size`: 5-7 digit integer
-- `polarity`: `positive` | `negative`, read by `hex_variable` only
+- `polarity`: `positive` | `negative` | `neutral`, read by `hex_variable` only
 
 MapServer applies validation defaults; SQL additionally clamps:
 
 - year: `1500..2100`
-- hex size: `40000..600000` meters
+- hex size: `20000..300000` meters (Equal Earth metres, so the same real area anywhere)
+
+Advertised CRS: `EPSG:4326`, `EPSG:8857` and `EPSG:3857`, with WMS 1.1.1 (`SRS`, not `CRS`),
+which sidesteps 1.3.0's axis-order rules. Each layer narrows that to the one plane its mesh
+was cut in: `hex_variable` / `hex_outline` serve `EPSG:8857` and
+`hex_variable_mercator` / `hex_outline_mercator` serve `EPSG:3857`. A layer is never
+reprojected into the other plane, because a hexagon is a hexagon only in the plane it was
+cut in — see the note above `hex_variable_mercator` in the mapfile.
 
 ## 6) Local Setup and Operations
 
@@ -175,8 +212,8 @@ MapServer applies validation defaults; SQL additionally clamps:
 ### Typical startup
 
 Set cache toggle in `.env`:
-- `DEMSCORE_ENABLE_MAPCACHE=0` (no cache)
-- `DEMSCORE_ENABLE_MAPCACHE=1` (enable cache proxy)
+- `DEMSCORE_ENABLE_MAPCACHE=0` (no server/browser tile cache)
+- `DEMSCORE_ENABLE_MAPCACHE=1` (enable server/browser tile cache)
 
 1. Start services:
    - `./scripts/dev_up.sh`
@@ -200,11 +237,64 @@ Set cache toggle in `.env`:
 - `demscore.dataset_values` is the normalized value layer. If dataset column names change, update loader extraction logic first.
 - `demscore.variable_metadata` is the UI-facing dictionary layer (human titles, citations, descriptions, provenance).
 - `demscore.variable_metadata_raw` is a refreshable staging table for parsed codebook output.
-- `demscore.hex_mesh` stores precomputed geometry for `hex_size` values 40000..600000 (step 10000).
+- `demscore.hex_mesh` stores precomputed geometry for `hex_size` values 20000..300000 (step 5000).
 - `demscore.hex_borders` is derived from `demscore.hex_mesh` and is rebuilt with it. It matches
   the two sides of an edge by exact geometry, which holds because `ST_HexagonGrid` makes every
   country's mesh part of one global grid; a change that gave countries their own grids would
   silently leave every hexagon outlined on its own.
+- Everything spatial is EPSG:8857, Equal Earth. One hexagon is one real area anywhere on
+  the map, which is the only reading under which a hexagon count means anything; Web
+  Mercator scaled area by sec^2(latitude) and the mesh inherited it, so Russia carried
+  795 hexagons across 17.0M km2 while Brazil carried 85 across 8.5M.
+  - there is a second mesh, `demscore.hex_mesh_mercator`, cut in EPSG:3857 by
+    `sql/mapserver_hex_mercator.sql`, and the web app's projection toggle switches to it.
+    It is a second mesh and not the first one reprojected: a hexagon is a hexagon only in
+    the plane it was cut in, and an Equal Earth cell pushed into Mercator is drawn twice as
+    tall as it is wide by 60N and as a sliver by 80N. What the toggle compares is what a
+    cell *means* — a fixed amount of ground against a fixed amount of screen — so the
+    Mercator mesh is the old distortion on purpose, kept alongside rather than in place of
+    the real one. Its size ladder is 40k-600k step 10k, twice the Equal Earth one, but
+    the app asks both projections for the *same* three sizes (200k/100k/50k): both count
+    in Web Mercator's resolution ladder, so a cell is drawn `hex_size_m / resolution`
+    pixels across in either plane and an equal size is an equal grain on screen. The
+    counts then differ on purpose — 5 917 Mercator cells at 200k against 1 396 in Equal
+    Earth — because that surplus is the distortion being shown. The stops used to be
+    doubled for Mercator to make the totals match, which only bought the matching number
+    by drawing every Mercator cell twice as wide.
+  - **every country has at least one hexagon at every size**, and three passes in
+    `sql/mapserver_hex_setup.sql` are what make that true. A cell is kept when its centre
+    falls inside the country; left at that, whether a small country is on the map is a
+    lottery on the global grid's phase, and Denmark had one cell at 200k and none at
+    100k. So a country that wins none is given the cells that hold the most of it (over
+    the border on purpose, at most what its own area could fill, never a neighbour's last
+    cell); then whatever is still empty takes a cell anyway, displacing a neighbour that
+    holds less of it — which cannot ping-pong, because a cell only ever moves to a country
+    holding more of it; then the `inset` pass covers what no grid can seat. At the
+    coarsest sizes some regions hold more countries than cells covering them — the western
+    Balkans at 200k — so no dealing of cells can seat them all. Those get a hexagon from
+    the grid one notch finer, marked `inset`, overlapping the cell below and drawn by a
+    layer of its own on top of it (`hex_inset`; MapServer cannot be told to sort features
+    within a layer). 5 of 177 at 200k in Equal Earth, 4 in Mercator, none at 100k or below.
+  - `demscore.countries.geom_3857` *is* clipped at `+/-85.05112878`, for the same reason
+    `geom_8857` is not: that latitude is where Web Mercator's y runs off to infinity.
+  - the size ladder is deliberately half the old Mercator one. A Mercator hexagon covered
+    ground area proportional to cos^2(latitude), so the old sizes were counting on a
+    surplus of hexagons near the poles; halved, the meshes land within 4% of the old
+    counts at every stop the app uses while carrying real areas.
+  - `demscore.countries.geom_8857` has no latitude clip. The old `+/-85.05112878` cut was
+    Web Mercator's limit, not the world's.
+- Deriving a world extent by transforming the `(-180,-90)` and `(180,90)` corners gives a
+  box 41% too narrow. Equal Earth is widest on the equator (x = `+/-17243959`) and
+  narrowest at the poles (`+/-10216474`); y runs to `+/-8392927`. Every extent in the
+  stack -- mapfile, preloader, `webapp/src/core/projection.js` -- comes from those numbers.
+  - the web client draws *less* than that box. `viewExtent` in `projection.js` cuts
+    everything south of 60S, and it is what the world fit and the pan limit are
+    measured against; nothing below carries an indicator value, since the southernmost
+    land outside Antarctica is Chile at 55.6S and Antarctica is on the basemap but in
+    no dataset. The full box stays as the tile grid's, because a tile coordinate is a
+    slice of it and narrowing it would rename every tile and void both caches. The
+    crop is worth 29% of Web Mercator's square world and, in Equal Earth, only a pan
+    limit at ordinary window shapes -- see the projection notes in `webapp/AGENTS.md`.
 - Preserve join quality in `hex_variable`: ISO3 matching is primary; name matching is fallback.
 - `webapp/config/variable_coverage.json` is derived from `demscore.dataset_values`. It is a
   build artifact, not a source of truth, and goes stale silently: rerun

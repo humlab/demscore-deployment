@@ -9,28 +9,48 @@ const CONFIG_DIR = process.env.CONFIG_DIR || path.join(__dirname, "webapp-config
 const REFERENCE_DATA_DIR = process.env.REFERENCE_DATA_DIR || path.join(__dirname, "..", "data", "reference");
 const LAND_BASEMAP_FILE = "ne_110m_admin_0_countries.geojson";
 const WMS_BASE_PATH = "/mapserver?map=/etc/mapserver/mapserver.map";
+const CACHE_ENABLED = isTruthy(process.env.DEMSCORE_ENABLE_MAPCACHE || "0");
 
+// `download` points at Demscore's own downloader, not at a file of ours. The
+// portal has no per-variable page to deep-link to — `menu_all_variables` is a
+// DataTables grid that reads no query string, so a URL cannot name a variable —
+// but a *download ID* names a saved selection and replays it exactly. The three
+// below are the selections this deployment loads: fetch one and its `data.csv`
+// carries the same columns as `data/Demscore_Module_Vars/<module>`, alongside
+// that module's codebook and the Demscore methodology PDF. So the link is
+// per-dataset, and a variable's card offers its dataset's download.
 const DATASET_META = {
   qog: {
     label: "QoG",
     title: "Quality of Government",
     codebook: "./assets/codebooks/qog-codebook.pdf",
+    download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=81929b1e-8ab2-4409-a3e1-ffaff751c039",
     defaultVariable: "qog_std_ts_ti_cpi",
   },
   repdem: {
     label: "REPDEM",
     title: "Representative Democracy",
-    color: "#a76510",
     codebook: "./assets/codebooks/repdem-codebook.pdf",
+    download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=2ee386d8-5059-4111-b43f-19a42c662840",
     defaultVariable: "repdem_basic_enpp",
   },
   v_dem: {
     label: "V-Dem",
     title: "Varieties of Democracy",
     codebook: "./assets/codebooks/v-dem-codebook.pdf",
+    download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=1dfe5c25-dcba-4b8d-808d-49269a1336f6",
     defaultVariable: "v2x_polyarchy",
   },
 };
+
+// How a dataset presents itself, as opposed to what it contains. The database
+// supplies the variables and the year span; these come from config.
+const DATASET_PRESENTATION_KEYS = ["label", "title", "description", "color", "palette", "codebook", "download", "image"];
+
+// Mirrors the mapfile's own VALIDATION block for these parameters.
+const VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_]+$/;
+const YEAR_MIN = 1500;
+const YEAR_MAX = 2100;
 
 const DEFAULTS = {
   dataset: "v_dem",
@@ -51,6 +71,10 @@ const pool = new Pool({
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+function isTruthy(value) {
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
 
 function asyncRoute(handler) {
   return (req, res, next) => {
@@ -172,6 +196,7 @@ async function fetchVariablesConfigFromDb() {
       title: fallbackMeta.title || fallbackMeta.label || datasetKey,
       color: fallbackMeta.color,
       codebook: fallbackMeta.codebook,
+      download: fallbackMeta.download,
       defaultVariable,
       yearMin: Number.isInteger(row.year_min) ? row.year_min : DEFAULTS.year,
       yearMax: Number.isInteger(row.year_max) ? row.year_max : DEFAULTS.year,
@@ -197,11 +222,37 @@ async function fetchVariablesConfigFromDb() {
   };
 }
 
+// `DATASET_META` is only a built-in default. `webapp/config/variables.json` is
+// the documented source of a dataset's presentation metadata, but the database
+// path never read it, so anything added there — a colour palette, say — was
+// silently ignored unless the whole `demscore.variables` table was missing.
+function overlayDatasetPresentation(dbConfig, fileConfig) {
+  const fileDatasets =
+    fileConfig?.datasets && typeof fileConfig.datasets === "object" ? fileConfig.datasets : {};
+
+  for (const [datasetKey, dataset] of Object.entries(dbConfig.datasets)) {
+    const fromFile = fileDatasets[datasetKey];
+    if (!fromFile || typeof fromFile !== "object") continue;
+
+    for (const key of DATASET_PRESENTATION_KEYS) {
+      if (fromFile[key] !== undefined) dataset[key] = fromFile[key];
+    }
+    // A default the file names only counts if the dataset still has it.
+    if (
+      typeof fromFile.defaultVariable === "string" &&
+      dataset.variables.includes(fromFile.defaultVariable)
+    ) {
+      dataset.defaultVariable = fromFile.defaultVariable;
+    }
+  }
+  return dbConfig;
+}
+
 async function getVariablesConfig() {
   try {
     const dbConfig = await fetchVariablesConfigFromDb();
     if (dbConfig) {
-      return dbConfig;
+      return overlayDatasetPresentation(dbConfig, await readJsonConfig("variables.json", null));
     }
   } catch (error) {
     if (error.code !== "42P01") {
@@ -383,6 +434,40 @@ async function getVariableCoverageConfig() {
   return readJsonConfig("variable_coverage.json", { datasets: {} });
 }
 
+// Curated cross-dataset topics for the variable list. Hand-maintained rather than
+// derived: the codebook section a variable sits under is dataset-scoped and, for
+// this selection, mostly one variable per section, so it seeds the mapping but
+// cannot be it.
+async function getVariableTopicsConfig() {
+  return readJsonConfig("variable_topics.json", { order: [], topics: {}, assignments: {} });
+}
+
+// The legend paints seven quantile classes; these are the value spans behind
+// them. Same source as the map -- demscore.country_scores() is what the WMS
+// layer classes on -- so the numbers the legend shows on hover are the numbers
+// the hexagons were coloured by, not a second, separately computed set.
+async function getClassBreaks(dataset, variable, year) {
+  const result = await pool.query(
+    `SELECT
+       class_idx::INT AS class_idx,
+       min(value)::DOUBLE PRECISION AS min_value,
+       max(value)::DOUBLE PRECISION AS max_value,
+       count(*)::INT AS country_count
+     FROM demscore.country_scores($1, $2, $3)
+     WHERE class_idx IS NOT NULL
+     GROUP BY class_idx
+     ORDER BY class_idx;`,
+    [dataset, variable, year],
+  );
+
+  return result.rows.map((row) => ({
+    classIndex: row.class_idx,
+    min: row.min_value,
+    max: row.max_value,
+    countryCount: row.country_count,
+  }));
+}
+
 async function getLandBasemapGeoJson() {
   return fs.readFile(path.join(REFERENCE_DATA_DIR, LAND_BASEMAP_FILE), "utf8");
 }
@@ -394,6 +479,7 @@ app.get("/healthz", asyncRoute(async (_req, res) => {
 
 app.get("/api/runtime", asyncRoute(async (_req, res) => {
   res.json({
+    cacheEnabled: CACHE_ENABLED,
     mapServerBase: WMS_BASE_PATH,
   });
 }));
@@ -407,18 +493,21 @@ app.get("/api/basemap/land", asyncRoute(async (_req, res) => {
 }));
 
 app.get("/api/config", asyncRoute(async (_req, res) => {
-  const [variables, legendSemantics, variablePolarity, variableCoverage] = await Promise.all([
-    getVariablesConfig(),
-    getLegendSemanticsConfig(),
-    getVariablePolarityConfig(),
-    getVariableCoverageConfig(),
-  ]);
+  const [variables, legendSemantics, variablePolarity, variableCoverage, variableTopics] =
+    await Promise.all([
+      getVariablesConfig(),
+      getLegendSemanticsConfig(),
+      getVariablePolarityConfig(),
+      getVariableCoverageConfig(),
+      getVariableTopicsConfig(),
+    ]);
 
   res.json({
     variables,
     legendSemantics,
     variablePolarity,
     variableCoverage,
+    variableTopics,
   });
 }));
 
@@ -465,6 +554,37 @@ app.get("/api/config/variable-coverage", asyncRoute(async (_req, res) => {
   res
     .set("Cache-Control", "public, max-age=3600")
     .json(await getVariableCoverageConfig());
+}));
+
+app.get("/api/config/variable-topics", asyncRoute(async (_req, res) => {
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json(await getVariableTopicsConfig());
+}));
+
+// Hovering a legend swatch asks what values it stands for. Keyed exactly like
+// the WMS request the map made (dataset, variable, year), and validated the
+// same way the mapfile validates its own parameters, so an unknown dataset is a
+// 400 here rather than silently falling back to v_dem the way country_scores()
+// would.
+app.get("/api/class-breaks", asyncRoute(async (req, res) => {
+  const dataset = typeof req.query.dataset === "string" ? req.query.dataset.toLowerCase() : "";
+  const variable = typeof req.query.variable === "string" ? req.query.variable : "";
+  const year = Number.parseInt(req.query.year, 10);
+
+  if (!DATASET_META[dataset] || !VARIABLE_KEY_PATTERN.test(variable) || !Number.isInteger(year)
+      || year < YEAR_MIN || year > YEAR_MAX) {
+    res.status(400).json({
+      error: "bad_request",
+      message: "dataset, variable and year query parameters are required and must be valid",
+    });
+    return;
+  }
+
+  const classes = await getClassBreaks(dataset, variable, year);
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json({ dataset, variable, year, classes });
 }));
 
 app.use((err, _req, res, _next) => {

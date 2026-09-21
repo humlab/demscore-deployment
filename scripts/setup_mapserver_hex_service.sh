@@ -68,6 +68,12 @@ echo "Creating normalized map tables, precomputed hex meshes, and map function..
 echo "This step expects dataset values to be loaded first via scripts/load_demscore_module_vars.sh"
 podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f - < "${ROOT_DIR}/sql/mapserver_hex_setup.sql"
 
+# The second mesh, cut in Web Mercator, for the projection toggle. A hexagon is
+# only a hexagon in the plane it was cut in, so the comparison view cannot reuse
+# the Equal Earth mesh -- see the note at the top of the file.
+echo "Building the Web Mercator hex mesh for the projection toggle..."
+podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f - < "${ROOT_DIR}/sql/mapserver_hex_mercator.sql"
+
 echo "Validating map function outputs..."
 podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -c "
 SELECT
@@ -87,22 +93,29 @@ echo "Validating WMS GetCapabilities..."
 curl -sS "http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&REQUEST=GetCapabilities" \
   | head -n 20
 
-echo "Validating WMS GetMap..."
-map_response="$(curl -sS -o /tmp/demscore_hex_test.png -w '%{http_code} %{content_type} %{size_download}' 'http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&CRS=EPSG:4326&BBOX=-60,-180,85,180&WIDTH=1200&HEIGHT=700&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=200000')"
+# Requested exactly the way the web app requests it -- WMS 1.1.1, SRS rather
+# than CRS, and the full Equal Earth world box -- so a mapfile that only renders
+# under some other projection or axis order fails here rather than in a browser.
+echo "Validating WMS GetMap (EPSG:8857)..."
+map_response="$(curl -sS -o /tmp/demscore_hex_test.png -w '%{http_code} %{content_type} %{size_download}' 'http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000')"
 echo "$map_response"
+case "$map_response" in
+  200\ image/png*) ;;
+  *) echo "GetMap did not return a PNG -- the mapfile or the hex mesh is not serving Equal Earth." >&2; exit 1 ;;
+esac
 
 echo
 cat <<'EOF'
 Setup complete.
 
 Example GetMap request:
-http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&CRS=EPSG:4326&BBOX=-60,-180,85,180&WIDTH=1200&HEIGHT=700&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=200000
+http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000
 
 Web app:
 http://127.0.0.1:8090/
 
-Optional cache proxy:
+WMS tile caching:
 Set DEMSCORE_ENABLE_MAPCACHE=1 in .env, then run this script.
-WMS via cache: http://127.0.0.1:8089/?map=/etc/mapserver/mapserver.map
-Web app (uses cache automatically when enabled): http://127.0.0.1:8090/
+WMS via app route: http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map
+Web app: http://127.0.0.1:8090/
 EOF

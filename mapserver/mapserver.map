@@ -3,12 +3,16 @@ MAP
   STATUS ON
   IMAGETYPE PNG
   SIZE 1200 700
-  EXTENT -180 -85 180 85
-  UNITS DD
+  # The Equal Earth world box. Note it is NOT the transform of the (-180,-90)
+  # and (180,90) corners: the projection is at its widest on the equator, where
+  # x reaches +/-17243959, and narrows to +/-10216474 at the poles. Deriving
+  # this extent from the corners would cut 41% off the width of the world.
+  EXTENT -17243960 -8392928 17243960 8392928
+  UNITS METERS
   MAXSIZE 10000
 
   PROJECTION
-    "init=epsg:4326"
+    "init=epsg:8857"
   END
 
   WEB
@@ -16,8 +20,11 @@ MAP
       "ows_enable_request" "*"
       "wms_title" "Demscore Hexagons"
       "wms_abstract" "Hexagon thematic map from Demscore variables in PostGIS"
-      "wms_onlineresource" "http://localhost:8088/?map=/etc/mapserver/mapserver.map"
-      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_onlineresource" "http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map"
+      # Both planes the service can draw in. Each layer narrows this to the one
+      # its mesh was cut in: a mesh reprojected into the other plane is no longer
+      # made of hexagons, which is the whole reason there are two meshes.
+      "wms_srs" "EPSG:4326 EPSG:8857 EPSG:3857"
       "wms_allow_getmap_without_styles" "true"
       "wms_feature_info_mime_type" "text/plain"
       "wms_keywordlist" "demscore,hexagons,postgis"
@@ -28,18 +35,18 @@ MAP
     NAME "hex_variable"
     TYPE POLYGON
     STATUS ON
-    EXTENT -20037508.34 -20037508.34 20037508.34 20037508.34
+    EXTENT -17243960 -8392928 17243960 8392928
     CONNECTIONTYPE POSTGIS
     PROJECTION
-      "init=epsg:3857"
+      "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
       "wms_title" "Dataset Variable Hexagons"
-      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_srs" "EPSG:4326 EPSG:8857"
       "wms_include_items" "all"
       "gml_include_items" "all"
     END
@@ -49,7 +56,7 @@ MAP
       "variable" "^[A-Za-z0-9_]+$"
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
-      "polarity" "^(positive|negative)$"
+      "polarity" "^(positive|negative|neutral)$"
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
@@ -57,75 +64,56 @@ MAP
       "default_polarity" "negative"
     END
 
-    CLASS
-      NAME "1"
-      EXPRESSION ([class_idx] = 1)
-      STYLE
-        COLOR 49 54 149
-        OUTLINECOLOR 255 255 255
-        WIDTH 0.25
-      END
+    INCLUDE "hex_classes.inc"
+  END
+
+  # The countries no grid can seat.
+  #
+  # At the coarsest sizes there are regions -- the western Balkans is the one
+  # that bites -- holding more countries than there are cells covering them, so
+  # however the cells are dealt out somebody gets none. Those countries are given
+  # a hexagon from the grid one notch finer, sitting where the country is, and it
+  # overlaps the cell underneath; see the inset pass in sql/mapserver_hex_setup.sql.
+  #
+  # It is a layer rather than more rows in hex_variable because MapServer draws a
+  # layer's features in whatever order the query returns them and offers no way
+  # to sort them, so a small hexagon among big ones has no guaranteed way to end
+  # up on top. A layer does: the client names this one after the fill layer, and
+  # layers are drawn in the order they are named.
+  LAYER
+    NAME "hex_inset"
+    TYPE POLYGON
+    STATUS ON
+    EXTENT -17243960 -8392928 17243960 8392928
+    CONNECTIONTYPE POSTGIS
+    PROJECTION
+      "init=epsg:8857"
+    END
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=8857"
+    PROCESSING "CLOSE_CONNECTION=DEFER"
+
+    METADATA
+      "wms_title" "Inset Hexagons"
+      "wms_srs" "EPSG:4326 EPSG:8857"
+      "wms_include_items" "all"
+      "gml_include_items" "all"
     END
 
-    CLASS
-      NAME "2"
-      EXPRESSION ([class_idx] = 2)
-      STYLE
-        COLOR 69 117 180
-        OUTLINECOLOR 255 255 255
-        WIDTH 0.25
-      END
+    VALIDATION
+      "dataset" "^(qog|repdem|v_dem)$"
+      "variable" "^[A-Za-z0-9_]+$"
+      "year" "^[0-9]{4}$"
+      "hex_size" "^[0-9]{5,7}$"
+      "polarity" "^(positive|negative|neutral)$"
+      "default_dataset" "v_dem"
+      "default_variable" "v2x_polyarchy"
+      "default_year" "2020"
+      "default_hex_size" "200000"
+      "default_polarity" "negative"
     END
 
-    CLASS
-      NAME "3"
-      EXPRESSION ([class_idx] = 3)
-      STYLE
-        COLOR 116 173 209
-        OUTLINECOLOR 255 255 255
-        WIDTH 0.25
-      END
-    END
-
-    CLASS
-      NAME "4"
-      EXPRESSION ([class_idx] = 4)
-      STYLE
-        COLOR 171 217 233
-        OUTLINECOLOR 255 255 255
-        WIDTH 0.25
-      END
-    END
-
-    CLASS
-      NAME "5"
-      EXPRESSION ([class_idx] = 5)
-      STYLE
-        COLOR 253 174 97
-        OUTLINECOLOR 255 255 255
-        WIDTH 0.25
-      END
-    END
-
-    CLASS
-      NAME "6"
-      EXPRESSION ([class_idx] = 6)
-      STYLE
-        COLOR 244 109 67
-        OUTLINECOLOR 255 255 255
-        WIDTH 0.25
-      END
-    END
-
-    CLASS
-      NAME "7"
-      EXPRESSION ([class_idx] = 7)
-      STYLE
-        COLOR 215 48 39
-        OUTLINECOLOR 255 255 255
-        WIDTH 0.25
-      END
-    END
+    INCLUDE "hex_classes.inc"
   END
 
   # The black perimeter drawn around each run of same-coloured hexagons. It is a
@@ -147,17 +135,146 @@ MAP
     NAME "hex_outline"
     TYPE LINE
     STATUS ON
-    EXTENT -20037508.34 -20037508.34 20037508.34 20037508.34
+    EXTENT -17243960 -8392928 17243960 8392928
+    CONNECTIONTYPE POSTGIS
+    PROJECTION
+      "init=epsg:8857"
+    END
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=8857"
+    PROCESSING "CLOSE_CONNECTION=DEFER"
+
+    METADATA
+      "wms_title" "Equal-Value Area Outlines"
+      "wms_srs" "EPSG:4326 EPSG:8857"
+      "wms_include_items" "all"
+      "gml_include_items" "all"
+    END
+
+    VALIDATION
+      "dataset" "^(qog|repdem|v_dem)$"
+      "variable" "^[A-Za-z0-9_]+$"
+      "year" "^[0-9]{4}$"
+      "hex_size" "^[0-9]{5,7}$"
+      "default_dataset" "v_dem"
+      "default_variable" "v2x_polyarchy"
+      "default_year" "2020"
+      "default_hex_size" "200000"
+    END
+
+    CLASS
+      NAME "area outline"
+      STYLE
+        COLOR 17 17 17
+        WIDTH 1.6
+        LINECAP ROUND
+        LINEJOIN ROUND
+      END
+    END
+  END
+
+  # The same two layers again, over the mesh cut in Web Mercator.
+  #
+  # They exist because a hexagon is only a hexagon in the plane it was cut in.
+  # Serving the Equal Earth mesh in EPSG:3857 is one request away and produces a
+  # map of slivers -- a cell at 60N drawn twice as tall as it is wide, and by 80N
+  # a streak -- which stops reading as a hex map at all. So each projection has a
+  # mesh of its own and each layer names only the SRS its mesh belongs to.
+  #
+  # Everything else is shared: the same country_scores() call, the same class
+  # shifts, the same colours out of hex_classes.inc. What changes is what a cell
+  # stands for. An Equal Earth cell is a fixed amount of ground; a Mercator cell
+  # is a fixed amount of screen, and so less and less ground the further it sits
+  # from the equator. The hex sizes are twice the Equal Earth ones, which is what
+  # makes the two maps the same grain to look at -- see sql/mapserver_hex_mercator.sql.
+  LAYER
+    NAME "hex_variable_mercator"
+    TYPE POLYGON
+    STATUS ON
+    EXTENT -20037508 -20037508 20037508 20037508
     CONNECTIONTYPE POSTGIS
     PROJECTION
       "init=epsg:3857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
-      "wms_title" "Equal-Value Area Outlines"
+      "wms_title" "Dataset Variable Hexagons (Web Mercator)"
+      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_include_items" "all"
+      "gml_include_items" "all"
+    END
+
+    VALIDATION
+      "dataset" "^(qog|repdem|v_dem)$"
+      "variable" "^[A-Za-z0-9_]+$"
+      "year" "^[0-9]{4}$"
+      "hex_size" "^[0-9]{5,7}$"
+      "polarity" "^(positive|negative|neutral)$"
+      "default_dataset" "v_dem"
+      "default_variable" "v2x_polyarchy"
+      "default_year" "2020"
+      "default_hex_size" "200000"
+      "default_polarity" "negative"
+    END
+
+    INCLUDE "hex_classes.inc"
+  END
+
+  # The Mercator mesh's insets. See the note on hex_inset.
+  LAYER
+    NAME "hex_inset_mercator"
+    TYPE POLYGON
+    STATUS ON
+    EXTENT -20037508 -20037508 20037508 20037508
+    CONNECTIONTYPE POSTGIS
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=3857"
+    PROCESSING "CLOSE_CONNECTION=DEFER"
+
+    METADATA
+      "wms_title" "Inset Hexagons (Web Mercator)"
+      "wms_srs" "EPSG:4326 EPSG:3857"
+      "wms_include_items" "all"
+      "gml_include_items" "all"
+    END
+
+    VALIDATION
+      "dataset" "^(qog|repdem|v_dem)$"
+      "variable" "^[A-Za-z0-9_]+$"
+      "year" "^[0-9]{4}$"
+      "hex_size" "^[0-9]{5,7}$"
+      "polarity" "^(positive|negative|neutral)$"
+      "default_dataset" "v_dem"
+      "default_variable" "v2x_polyarchy"
+      "default_year" "2020"
+      "default_hex_size" "200000"
+      "default_polarity" "negative"
+    END
+
+    INCLUDE "hex_classes.inc"
+  END
+
+  LAYER
+    NAME "hex_outline_mercator"
+    TYPE LINE
+    STATUS ON
+    EXTENT -20037508 -20037508 20037508 20037508
+    CONNECTIONTYPE POSTGIS
+    PROJECTION
+      "init=epsg:3857"
+    END
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders_mercator hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=3857"
+    PROCESSING "CLOSE_CONNECTION=DEFER"
+
+    METADATA
+      "wms_title" "Equal-Value Area Outlines (Web Mercator)"
       "wms_srs" "EPSG:4326 EPSG:3857"
       "wms_include_items" "all"
       "gml_include_items" "all"

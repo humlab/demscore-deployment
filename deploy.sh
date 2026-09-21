@@ -92,7 +92,7 @@ cmd_install() {
   echo ""
   echo "Install complete."
   echo "  Web app:   http://127.0.0.1:8090"
-  echo "  MapServer: http://127.0.0.1:8088/?map=/etc/mapserver/mapserver.map"
+  echo "  MapServer: http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map"
 }
 
 cmd_start() {
