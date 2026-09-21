@@ -284,6 +284,14 @@ Set cache toggle in `.env`:
   box 41% too narrow. Equal Earth is widest on the equator (x = `+/-17243959`) and
   narrowest at the poles (`+/-10216474`); y runs to `+/-8392927`. Every extent in the
   stack -- mapfile, preloader, `webapp/src/core/projection.js` -- comes from those numbers.
+  - the web client draws *less* than that box. `viewExtent` in `projection.js` cuts
+    everything south of 60S, and it is what the world fit and the pan limit are
+    measured against; nothing below carries an indicator value, since the southernmost
+    land outside Antarctica is Chile at 55.6S and Antarctica is on the basemap but in
+    no dataset. The full box stays as the tile grid's, because a tile coordinate is a
+    slice of it and narrowing it would rename every tile and void both caches. The
+    crop is worth 29% of Web Mercator's square world and, in Equal Earth, only a pan
+    limit at ordinary window shapes -- see the projection notes in `webapp/AGENTS.md`.
 - Preserve join quality in `hex_variable`: ISO3 matching is primary; name matching is fallback.
 - `webapp/config/variable_coverage.json` is derived from `demscore.dataset_values`. It is a
   build artifact, not a source of truth, and goes stale silently: rerun
