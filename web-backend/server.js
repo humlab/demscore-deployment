@@ -446,25 +446,74 @@ async function getVariableTopicsConfig() {
 // them. Same source as the map -- demscore.country_scores() is what the WMS
 // layer classes on -- so the numbers the legend shows on hover are the numbers
 // the hexagons were coloured by, not a second, separately computed set.
+//
+// The two totals ride along because the map's spoken summary needs them and
+// this is already the one request made for every dataset/variable/year the map
+// draws. A country with no value for this year is not drawn at all, so
+// `countriesTotal - countriesWithData` is how much of the map is bare land --
+// which is a reading of the data, not a gap in it, and the summary has to say so.
 async function getClassBreaks(dataset, variable, year) {
-  const result = await pool.query(
-    `SELECT
-       class_idx::INT AS class_idx,
-       min(value)::DOUBLE PRECISION AS min_value,
-       max(value)::DOUBLE PRECISION AS max_value,
-       count(*)::INT AS country_count
-     FROM demscore.country_scores($1, $2, $3)
-     WHERE class_idx IS NOT NULL
-     GROUP BY class_idx
-     ORDER BY class_idx;`,
-    [dataset, variable, year],
-  );
+  const [classes, totals] = await Promise.all([
+    pool.query(
+      `SELECT
+         class_idx::INT AS class_idx,
+         min(value)::DOUBLE PRECISION AS min_value,
+         max(value)::DOUBLE PRECISION AS max_value,
+         count(*)::INT AS country_count
+       FROM demscore.country_scores($1, $2, $3)
+       WHERE class_idx IS NOT NULL
+       GROUP BY class_idx
+       ORDER BY class_idx;`,
+      [dataset, variable, year],
+    ),
+    pool.query("SELECT count(*)::INT AS total FROM demscore.countries;"),
+  ]);
 
-  return result.rows.map((row) => ({
+  const classList = classes.rows.map((row) => ({
     classIndex: row.class_idx,
     min: row.min_value,
     max: row.max_value,
     countryCount: row.country_count,
+  }));
+
+  return {
+    classes: classList,
+    countriesWithData: classList.reduce((sum, entry) => sum + entry.countryCount, 0),
+    countriesTotal: totals.rows?.[0]?.total ?? null,
+  };
+}
+
+// The map as a table: one row per country on the map, whether or not this
+// variable and year gave it a value.
+//
+// A WMS tile is a picture, and no assistive technology can be asked what a
+// hexagon stands for, so this is the map's non-visual equivalent rather than a
+// convenience export. It is deliberately the whole country table and not only
+// the countries with data: "Somalia is not shown for 2020" is as much of a
+// reading as a number is, and a table that quietly omitted it would look
+// complete while being wrong.
+//
+// Same source as everything else the map draws -- demscore.country_scores() --
+// so a value here is the value that country's hexagons were coloured by.
+async function getMapData(dataset, variable, year) {
+  const result = await pool.query(
+    `SELECT
+       c.name AS country,
+       NULLIF(trim(c.iso_a3), '') AS iso3,
+       cs.value::DOUBLE PRECISION AS value,
+       cs.class_idx::INT AS class_idx
+     FROM demscore.countries c
+     LEFT JOIN demscore.country_scores($1, $2, $3) cs
+       ON cs.country_id = c.id
+     ORDER BY c.name;`,
+    [dataset, variable, year],
+  );
+
+  return result.rows.map((row) => ({
+    country: row.country,
+    iso3: row.iso3,
+    value: row.value,
+    classIndex: row.class_idx,
   }));
 }
 
@@ -562,12 +611,11 @@ app.get("/api/config/variable-topics", asyncRoute(async (_req, res) => {
     .json(await getVariableTopicsConfig());
 }));
 
-// Hovering a legend swatch asks what values it stands for. Keyed exactly like
-// the WMS request the map made (dataset, variable, year), and validated the
-// same way the mapfile validates its own parameters, so an unknown dataset is a
-// 400 here rather than silently falling back to v_dem the way country_scores()
-// would.
-app.get("/api/class-breaks", asyncRoute(async (req, res) => {
+// The three parameters every map-state read shares, validated the same way the
+// mapfile validates its own, so an unknown dataset is a 400 here rather than
+// silently falling back to v_dem the way country_scores() would. Returns null
+// and answers the request itself when anything is off.
+function readMapStateQuery(req, res) {
   const dataset = typeof req.query.dataset === "string" ? req.query.dataset.toLowerCase() : "";
   const variable = typeof req.query.variable === "string" ? req.query.variable : "";
   const year = Number.parseInt(req.query.year, 10);
@@ -578,13 +626,40 @@ app.get("/api/class-breaks", asyncRoute(async (req, res) => {
       error: "bad_request",
       message: "dataset, variable and year query parameters are required and must be valid",
     });
-    return;
+    return null;
   }
 
-  const classes = await getClassBreaks(dataset, variable, year);
+  return { dataset, variable, year };
+}
+
+// Hovering a legend swatch asks what values it stands for, and the map's spoken
+// summary asks the same question for all seven classes at once. Keyed exactly
+// like the WMS request the map made (dataset, variable, year).
+app.get("/api/class-breaks", asyncRoute(async (req, res) => {
+  const params = readMapStateQuery(req, res);
+  if (!params) return;
+
+  const breaks = await getClassBreaks(params.dataset, params.variable, params.year);
   res
     .set("Cache-Control", "public, max-age=3600")
-    .json({ dataset, variable, year, classes });
+    .json({ ...params, ...breaks });
+}));
+
+// The map's contents as rows, for readers who cannot be shown an image of them.
+app.get("/api/map-data", asyncRoute(async (req, res) => {
+  const params = readMapStateQuery(req, res);
+  if (!params) return;
+
+  const rows = await getMapData(params.dataset, params.variable, params.year);
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json({
+      ...params,
+      classCount: 7,
+      countriesTotal: rows.length,
+      countriesWithData: rows.filter((row) => row.value !== null).length,
+      rows,
+    });
 }));
 
 app.use((err, _req, res, _next) => {

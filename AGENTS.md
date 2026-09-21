@@ -129,6 +129,13 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `scripts/build_variable_coverage.sh`: precomputes the variable list's coverage strips
   into `webapp/config/variable_coverage.json` (run by the setup script; rerun it after
   any load that changes which years or countries a variable covers)
+- `scripts/check_palette_contrast.mjs`: reads the seven quantile colours out of
+  `mapserver/hex_classes.inc` *and* out of `webapp/src/controllers/MapController.js`, fails if
+  the two disagree, and measures every adjacent class pair in greyscale and under simulated
+  protanopia, deuteranopia and tritanopia. Plain `node`, no dependencies. Run it after any
+  change to either list, or to the interface colour tokens it also checks
+- `ACCESSIBILITY.md`: what the accessibility work covers, the manual keyboard and
+  screen-reader checklist to run before a release, and what is still missing
 - `sql/mapserver_hex_setup.sql`: core DB objects and hex function
 - `mapserver/mapserver.map`: WMS config and style classes
 - `mapserver/README.md`: WMS parameter contract
@@ -174,10 +181,19 @@ The system turns tabular democracy indicator data into a thematic global hex map
 
 ### Web backend endpoints
 
-Config payloads (`/api/config/*`, listed in `webapp/AGENTS.md`) are files on disk. The two
-database-backed reads are `/api/config/variables` and `/api/class-breaks`; the latter answers
-the legend's hover card with the quantile class spans for one dataset/variable/year, validated
-the same way the mapfile validates its own parameters.
+Config payloads (`/api/config/*`, listed in `webapp/AGENTS.md`) are files on disk. The
+database-backed reads are `/api/config/variables`, `/api/class-breaks` and `/api/map-data`.
+The last two take the same `dataset`/`variable`/`year` triple the map's WMS request carries
+and validate it the same way the mapfile validates its own parameters (`readMapStateQuery`),
+so an unknown dataset is a 400 rather than a silent fall back to `v_dem`:
+
+- `/api/class-breaks` — the seven quantile class spans behind the legend bar, plus
+  `countriesWithData` and `countriesTotal`. The totals ride along because the map's spoken
+  summary needs them and this request is already made for every variable-year the map draws
+- `/api/map-data` — one row per country on the map (name, ISO3, value, class, no-data), for
+  the accessible data table. It is a `LEFT JOIN` from the whole country table on purpose: a
+  country with no value for this year is a reading of the data, and a table that quietly
+  omitted it would look complete while being wrong
 
 ### WMS parameter contract
 
@@ -316,6 +332,19 @@ Set cache toggle in `.env`:
 - `webapp/app.js` is intentionally framework-free; keep it dependency-light.
 - Preserve mobile layout behavior in `styles.css` (`@media (max-width: 900px)`).
 
+### Colour changes
+
+- The seven quantile colours are written twice: `mapserver/hex_classes.inc` paints the
+  hexagons, `LEGEND_COLORS_*` in `webapp/src/controllers/MapController.js` paints the legend
+  bar that is the key to them. `scripts/check_palette_contrast.mjs` is what keeps the two
+  lists the same list, and what measures whether adjacent classes survive a colour-vision
+  deficiency or greyscale. Run it after touching either.
+- **A palette change invalidates every cached tile.** The tiles carry the colours, not just
+  the geometry, and nothing in the URL changes when a colour does, so both caches keep
+  serving the old ramp under the new legend — which is worse than either. Clear the server
+  cache (`podman exec demscore-mapcache sh -c 'rm -rf /var/cache/nginx/* && nginx -s reload'`)
+  and hard-reload the browser, whose service worker holds its own copy.
+
 ## 8) Quality and Safety Checklist
 
 Before merging changes:
@@ -324,6 +353,9 @@ Before merging changes:
 2. Confirm `GetCapabilities` and one `GetMap` request succeed.
 3. Verify the web UI can switch dataset, variable, year, and hex size.
 4. Validate SQL changes with at least one query for each dataset (`qog`, `repdem`, `v_dem`).
+5. Run `node scripts/check_palette_contrast.mjs` if any colour moved.
+6. Run the keyboard pass in `ACCESSIBILITY.md` if any control, dialog or focus behaviour
+   moved. There is no automated accessibility check yet, so that list is the check.
 
 ## 9) Known Constraints and Risks
 
@@ -349,6 +381,18 @@ Before merging changes:
   `web-backend` -- as `password authentication failed for user "demscore"`.
   `scripts/sync_db_password.sh`, run on every `dev_up.sh`, reconciles the two.
 - No automated test suite currently exists; scripts provide operational smoke tests only.
+- The map is a WMS image, so nothing in it can be reached by assistive technology. The
+  non-visual equivalent -- `#mapSummary`, `#mapAnnouncer` and the data table, all in
+  `webapp/src/controllers/MapDataController.js` -- is a parallel implementation of what the
+  picture shows, and nothing enforces that the two stay in step. They are held together by
+  both being read from `demscore.country_scores()`; a change that colours the map from
+  anything else has to bring the summary with it.
+- The diverging ramp is not monotonic in lightness: classes 2 and 7 print as the same grey.
+  That is inherent to a diverging scheme and is the price of keeping polarity direction in
+  the colour. What answers it is the equal-colour area outlines (on by default, and the
+  toggle for them is on screen rather than behind Shift+D for this reason) and the data
+  table. `scripts/check_palette_contrast.mjs` reports the collision as a note on every run
+  so it stays a known trade rather than a surprise.
 
 ## 10) Recommended Next Improvements
 
@@ -356,3 +400,7 @@ Before merging changes:
 2. Add a small integration test script that validates map output for all three datasets.
 3. Consider materializing heavy intermediate results if response time degrades on larger datasets.
 4. Add data dictionary docs per dataset for easier variable onboarding.
+5. Add an automated accessibility audit (Playwright driving the desktop and phone states,
+   axe-core over each). It is the one item of the accessibility plan not done, purely
+   because it needs a dependency install this repository has never had; the states worth
+   auditing are listed at the end of `ACCESSIBILITY.md`.

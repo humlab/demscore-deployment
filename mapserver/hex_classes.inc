@@ -5,6 +5,20 @@
 # in has nothing to do with the colour it takes. class_idx is shifted by the
 # DATA query per polarity -- 1-7 negative, 8-x positive, 10+x neutral -- so the
 # bar always reads low-to-high left to right.
+#
+# These seven RGB triples and the LEGEND_COLORS_* lists in
+# webapp/src/controllers/MapController.js are the same ramp written twice, in two
+# languages. scripts/check_palette_contrast.mjs reads both files and fails if
+# they disagree, so run it after touching either -- a legend that paints a
+# different ramp from the map is a legend that lies.
+#
+# The neutral ramp is viridis (trimmed to 0.15-0.85 so neither end reaches
+# near-black or the yellow that would collide with the cream no-data land). It
+# replaced a seven-step emerald ramp whose two lightest classes were delta-E 6
+# apart under protanopia and deuteranopia -- indistinguishable -- and whose
+# lightest shade sat delta-E 17 from the no-data colour, so "no value" read as
+# "bottom of the scale". Viridis is monotonic in lightness, which is what makes
+# the ramp survive greyscale and a projector as well as colour blindness.
   CLASS
     NAME "1"
     EXPRESSION ([class_idx] = 1)
@@ -79,7 +93,7 @@
     NAME "neutral 1"
     EXPRESSION ([class_idx] = 11)
     STYLE
-      COLOR 209 250 229
+      COLOR 71 45 123
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -89,7 +103,7 @@
     NAME "neutral 2"
     EXPRESSION ([class_idx] = 12)
     STYLE
-      COLOR 167 243 208
+      COLOR 59 82 139
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -99,7 +113,7 @@
     NAME "neutral 3"
     EXPRESSION ([class_idx] = 13)
     STYLE
-      COLOR 110 231 183
+      COLOR 44 114 142
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -109,7 +123,7 @@
     NAME "neutral 4"
     EXPRESSION ([class_idx] = 14)
     STYLE
-      COLOR 52 211 153
+      COLOR 33 145 140
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -119,7 +133,7 @@
     NAME "neutral 5"
     EXPRESSION ([class_idx] = 15)
     STYLE
-      COLOR 16 185 129
+      COLOR 40 174 128
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -129,7 +143,7 @@
     NAME "neutral 6"
     EXPRESSION ([class_idx] = 16)
     STYLE
-      COLOR 5 150 105
+      COLOR 94 201 98
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -139,7 +153,7 @@
     NAME "neutral 7"
     EXPRESSION ([class_idx] = 17)
     STYLE
-      COLOR 4 120 87
+      COLOR 173 220 48
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
