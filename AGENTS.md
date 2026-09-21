@@ -118,7 +118,10 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `compose.yml`: service definitions, ports, mounts, optional cache profile
 - `initdb/01_extensions.sql`: bootstrap PostGIS extensions
 - `scripts/load_demscore_module_vars.sh`: CSV-to-table loader
-- `scripts/dev_up.sh`: starts core services and conditionally includes `mapcache` based on `.env`
+- `scripts/dev_up.sh`: starts core services and conditionally includes `mapcache` based on `.env`,
+  then calls `sync_db_password.sh`
+- `scripts/sync_db_password.sh`: `ALTER ROLE` over the trusted unix socket so the `demscore`
+  role's password matches `POSTGRES_PASSWORD` in `.env`
 - `scripts/extract_variable_metadata.py`: robust parser for codebook text blocks and variable metadata fields
 - `scripts/load_variable_metadata.sh`: PDF-to-DB metadata load pipeline for variable titles/citations/descriptions
 - `scripts/setup_mapserver_hex_service.sh`: full environment + geometry + SQL setup + smoke tests
@@ -247,6 +250,14 @@ Before merging changes:
   heights compare rows within a dataset and mean nothing across datasets — RepDem's
   fullest year reaches 32 countries where V-Dem's reaches 165.
 - Dynamic SQL surface is partially constrained by MapServer regex validation; keep validation strict.
+- `POSTGRES_PASSWORD` initialises the `demscore` role once, when the `pg_data` volume is
+  created, and lives in the volume from then on; changing `.env` afterwards does not reach
+  it. Nothing in `scripts/` notices, because they all reach the database as
+  `podman compose exec db psql`, over the unix socket the postgres image's `pg_hba.conf`
+  trusts. The mismatch surfaces only where a container connects over TCP, which
+  scram-sha-256 guards -- `ogr2ogr` in the setup script first, then `mapserver` and
+  `web-backend` -- as `password authentication failed for user "demscore"`.
+  `scripts/sync_db_password.sh`, run on every `dev_up.sh`, reconciles the two.
 - No automated test suite currently exists; scripts provide operational smoke tests only.
 
 ## 10) Recommended Next Improvements

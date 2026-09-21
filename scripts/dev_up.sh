@@ -35,3 +35,8 @@ fi
 podman compose rm -f "${services[@]}" 2>/dev/null || true
 
 podman compose up -d "${services[@]}"
+
+# POSTGRES_PASSWORD only initialises the role on the volume's first boot, so a
+# value that has changed since then leaves every TCP client locked out while
+# the socket-based scripts carry on working. Reconcile it on each start.
+"${ROOT_DIR}/scripts/sync_db_password.sh"
