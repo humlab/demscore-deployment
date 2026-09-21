@@ -131,7 +131,12 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `mapserver/README.md`: WMS parameter contract
 - `webapp/index.html`, `webapp/app.js`, `webapp/styles.css`: UI
 - `webapp/config/variables.json`: dataset presentation metadata — `label`, `title`, `color`,
-  `palette` (five shades, darkest first), `codebook`, `image`, `defaultVariable`. The variable
+  `palette` (five shades, darkest first), `codebook`, `download`, `image`, `defaultVariable`.
+  `download` is Demscore's own downloader replaying a saved *download ID*, one per module, and
+  the ID is the selection this deployment loads: its `data.csv` carries the same columns as
+  `data/Demscore_Module_Vars/<module>`. It is per-dataset because nothing finer exists — the
+  portal's variable browser (`menu_all_variables`) is a DataTables grid that reads no query
+  string, so no URL can name a variable. The variable
   lists and year spans in it are only a fallback: `getVariablesConfig()` builds those from
   `demscore.variables`, then `overlayDatasetPresentation()` lays this file's presentation keys
   over the result. Before that overlay existed the database path never read the file at all, so
@@ -245,9 +250,28 @@ Set cache toggle in `.env`:
     tall as it is wide by 60N and as a sliver by 80N. What the toggle compares is what a
     cell *means* — a fixed amount of ground against a fixed amount of screen — so the
     Mercator mesh is the old distortion on purpose, kept alongside rather than in place of
-    the real one. Its size ladder is 40k-600k step 10k, exactly twice the Equal Earth one,
-    which is what makes the two the same grain: Mercator 200k gives 5 917 cells against
-    Equal Earth 100k's 5 690.
+    the real one. Its size ladder is 40k-600k step 10k, twice the Equal Earth one, but
+    the app asks both projections for the *same* three sizes (200k/100k/50k): both count
+    in Web Mercator's resolution ladder, so a cell is drawn `hex_size_m / resolution`
+    pixels across in either plane and an equal size is an equal grain on screen. The
+    counts then differ on purpose — 5 917 Mercator cells at 200k against 1 396 in Equal
+    Earth — because that surplus is the distortion being shown. The stops used to be
+    doubled for Mercator to make the totals match, which only bought the matching number
+    by drawing every Mercator cell twice as wide.
+  - **every country has at least one hexagon at every size**, and three passes in
+    `sql/mapserver_hex_setup.sql` are what make that true. A cell is kept when its centre
+    falls inside the country; left at that, whether a small country is on the map is a
+    lottery on the global grid's phase, and Denmark had one cell at 200k and none at
+    100k. So a country that wins none is given the cells that hold the most of it (over
+    the border on purpose, at most what its own area could fill, never a neighbour's last
+    cell); then whatever is still empty takes a cell anyway, displacing a neighbour that
+    holds less of it — which cannot ping-pong, because a cell only ever moves to a country
+    holding more of it; then the `inset` pass covers what no grid can seat. At the
+    coarsest sizes some regions hold more countries than cells covering them — the western
+    Balkans at 200k — so no dealing of cells can seat them all. Those get a hexagon from
+    the grid one notch finer, marked `inset`, overlapping the cell below and drawn by a
+    layer of its own on top of it (`hex_inset`; MapServer cannot be told to sort features
+    within a layer). 5 of 177 at 200k in Equal Earth, 4 in Mercator, none at 100k or below.
   - `demscore.countries.geom_3857` *is* clipped at `+/-85.05112878`, for the same reason
     `geom_8857` is not: that latitude is where Web Mercator's y runs off to infinity.
   - the size ladder is deliberately half the old Mercator one. A Mercator hexagon covered

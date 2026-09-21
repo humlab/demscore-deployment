@@ -11,30 +11,41 @@ const LAND_BASEMAP_FILE = "ne_110m_admin_0_countries.geojson";
 const WMS_BASE_PATH = "/mapserver?map=/etc/mapserver/mapserver.map";
 const CACHE_ENABLED = isTruthy(process.env.DEMSCORE_ENABLE_MAPCACHE || "0");
 
+// `download` points at Demscore's own downloader, not at a file of ours. The
+// portal has no per-variable page to deep-link to — `menu_all_variables` is a
+// DataTables grid that reads no query string, so a URL cannot name a variable —
+// but a *download ID* names a saved selection and replays it exactly. The three
+// below are the selections this deployment loads: fetch one and its `data.csv`
+// carries the same columns as `data/Demscore_Module_Vars/<module>`, alongside
+// that module's codebook and the Demscore methodology PDF. So the link is
+// per-dataset, and a variable's card offers its dataset's download.
 const DATASET_META = {
   qog: {
     label: "QoG",
     title: "Quality of Government",
     codebook: "./assets/codebooks/qog-codebook.pdf",
+    download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=81929b1e-8ab2-4409-a3e1-ffaff751c039",
     defaultVariable: "qog_std_ts_ti_cpi",
   },
   repdem: {
     label: "REPDEM",
     title: "Representative Democracy",
     codebook: "./assets/codebooks/repdem-codebook.pdf",
+    download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=2ee386d8-5059-4111-b43f-19a42c662840",
     defaultVariable: "repdem_basic_enpp",
   },
   v_dem: {
     label: "V-Dem",
     title: "Varieties of Democracy",
     codebook: "./assets/codebooks/v-dem-codebook.pdf",
+    download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=1dfe5c25-dcba-4b8d-808d-49269a1336f6",
     defaultVariable: "v2x_polyarchy",
   },
 };
 
 // How a dataset presents itself, as opposed to what it contains. The database
 // supplies the variables and the year span; these come from config.
-const DATASET_PRESENTATION_KEYS = ["label", "title", "color", "palette", "codebook", "image"];
+const DATASET_PRESENTATION_KEYS = ["label", "title", "description", "color", "palette", "codebook", "download", "image"];
 
 // Mirrors the mapfile's own VALIDATION block for these parameters.
 const VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_]+$/;
@@ -185,6 +196,7 @@ async function fetchVariablesConfigFromDb() {
       title: fallbackMeta.title || fallbackMeta.label || datasetKey,
       color: fallbackMeta.color,
       codebook: fallbackMeta.codebook,
+      download: fallbackMeta.download,
       defaultVariable,
       yearMin: Number.isInteger(row.year_min) ? row.year_min : DEFAULTS.year,
       yearMax: Number.isInteger(row.year_max) ? row.year_max : DEFAULTS.year,

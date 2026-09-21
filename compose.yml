@@ -8,8 +8,15 @@ services:
       - web-backend
     ports:
       - "8090:80"
+    command:
+      - sh
+      - -lc
+      - |
+        resolver=$$(awk '/^nameserver/{print $$2; exit}' /etc/resolv.conf)
+        sed "s/@DNS_RESOLVER@/$$resolver/g" /etc/demscore-router/nginx.conf > /tmp/nginx.conf
+        exec nginx -c /tmp/nginx.conf -g "daemon off;"
     volumes:
-      - ./router/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./router/nginx.conf:/etc/demscore-router/nginx.conf:ro
     restart: unless-stopped
 
   db:
@@ -91,16 +98,21 @@ services:
       - mapserver
     environment:
       DEMSCORE_ENABLE_MAPCACHE: ${DEMSCORE_ENABLE_MAPCACHE:-0}
-    command: |
-      sh -lc 'case "${DEMSCORE_ENABLE_MAPCACHE:-0}" in
-        1|true|TRUE|yes|YES|on|ON)
-          cp /etc/demscore-mapcache/cache-enabled.conf /etc/nginx/nginx.conf
-          ;;
-        *)
-          cp /etc/demscore-mapcache/cache-disabled.conf /etc/nginx/nginx.conf
-          ;;
-      esac
-      nginx -g "daemon off;"'
+    command:
+      - sh
+      - -lc
+      - |
+        case "${DEMSCORE_ENABLE_MAPCACHE:-0}" in
+          1|true|TRUE|yes|YES|on|ON)
+            config=/etc/demscore-mapcache/cache-enabled.conf
+            ;;
+          *)
+            config=/etc/demscore-mapcache/cache-disabled.conf
+            ;;
+        esac
+        resolver=$$(awk '/^nameserver/{print $$2; exit}' /etc/resolv.conf)
+        sed "s/@DNS_RESOLVER@/$$resolver/g" "$$config" > /tmp/nginx.conf
+        exec nginx -c /tmp/nginx.conf -g "daemon off;"
     volumes:
       - ./mapcache:/etc/demscore-mapcache:ro
       - mapcache_data:/var/cache/nginx

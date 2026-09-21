@@ -24,8 +24,8 @@ Options:
   --zoom-min N           Minimum zoom level to warm (default: 1)
   --zoom-max N           Maximum zoom level to warm (default: 4)
   --tile-size N          WMS tile WIDTH/HEIGHT in pixels (default: 512)
-  --hex-size N           hex_size WMS parameter (default: the projection's world
-                         stop, 200000 in Equal Earth and 400000 in Mercator)
+  --hex-size N           hex_size WMS parameter (default: the world stop of the
+                         app's ladder, 200000 in either projection)
   --latest-year-only     Warm only each variable's latest available year
   --dataset LIST         Comma-separated dataset filter (e.g. qog,repdem)
   --max-requests N       Stop after N requests (for smoke testing)
@@ -171,9 +171,10 @@ case "$PROJECTION" in
     WORLD_HALF_Y=20037508.342789244
     WORLD_SRS="EPSG:3857"
     FILL_LAYER="hex_variable_mercator"
-    # Twice the Equal Earth stop, which is what makes the two the same grain --
-    # see sql/mapserver_hex_mercator.sql.
-    DEFAULT_HEX_SIZE=400000
+    # The same stop as Equal Earth, deliberately: both projections count in the
+    # same resolution ladder, so an equal size is an equal grain on screen --
+    # see hexResolutionStops in webapp/src/core/projection.js.
+    DEFAULT_HEX_SIZE=200000
     ;;
   *)
     echo "Unknown projection: $PROJECTION (expected equalearth or mercator)" >&2
