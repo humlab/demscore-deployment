@@ -32,24 +32,46 @@ not shown for 2020" is as much a reading of the data as a number is.
 
 ### Colour
 
-Two ramps, written twice — `mapserver/hex_classes.inc` paints the hexagons and
-`LEGEND_COLORS_*` in `webapp/src/controllers/MapController.js` paints the legend bar that is
-the key to them. `scripts/check_palette_contrast.mjs` reads both files, fails if they
-disagree, and measures every adjacent pair in greyscale and under simulated protanopia,
+**The reader picks the scheme.** Which colours work is not one question with one answer —
+about one man in twelve cannot use the red-green channel, a diverging ramp always has two
+classes that print as the same grey, and a projector flattens saturation — so *Colours* in
+the bottom-left map controls offers four, and the choice is kept in a cookie.
+
+| scheme | kind | what it is for |
+|---|---|---|
+| **Default** | diverging | Blue to red. Today's map: colour carries *which end is bad*, via `polarity`. |
+| **Indigo–amber** | diverging | Keeps that same reading, but separates roughly half again as far under simulated red-green deficiency (worst adjacent pair ΔE 18.1 against the default's 12.8). |
+| **Viridis** | sequential | One ramp for everything, dark purple to light green, always low to high. Monotonic in lightness, so it survives greyscale and a projector too. |
+| **Cividis** | sequential | One ramp for everything, dark blue to yellow. Built so protan and deutan viewers see very nearly what everyone else does. |
+
+The two sequential schemes cannot encode valence — one ramp, no second end to put anything
+at — so they run low-to-high always and ignore `polarity`. That is a real loss and it is the
+trade the reader makes: the "which end is bad" cue moves entirely into the legend's end
+labels, which are words. The legend bar, the legend note and the map's spoken summary all
+follow the chosen scheme, so none of them ever describes colours that are not on screen.
+
+Every colour is written once, in `webapp/src/core/palettes.js`;
+`scripts/build_hex_classes.mjs` generates the MapServer side from it, and
+`scripts/check_palette_contrast.mjs` reads both files, fails if they disagree, and measures
+every adjacent pair in every scheme in greyscale and under simulated protanopia,
 deuteranopia and tritanopia.
 
-- **Neutral** is viridis, trimmed to 0.15–0.85. It replaced a seven-step emerald ramp whose
-  two lightest classes were ΔE 6 apart under protanopia and deuteranopia — indistinguishable
-  — and whose lightest shade sat ΔE 17 from the cream no-data land, so "no value" read as
-  "bottom of the scale". Viridis is monotonic in lightness, so it also orders correctly in
-  greyscale and on a projector.
-- **Diverging** is ColorBrewer RdYlBu, and it stays. Every adjacent pair clears the
-  thresholds, but it is *not* monotonic in lightness: classes 2 and 7 print as the same grey.
-  That is inherent to a diverging scheme, and it is the price of keeping polarity direction
-  in the colour — blue at one end, red at the other. The script reports the collision as a
-  note on every run so it stays a known trade.
+Two things that shaped the menu, both found by running that script rather than by eye:
 
-What answers the grey collision is that colour is not the only channel:
+- **Every classic ColorBrewer diverging ramp is unusable here.** RdBu, PuOr and BrBG all
+  centre on a near-white class that sits ΔE 5–12 from the cream no-data land, so "no value"
+  would read as the middle of the scale. Indigo–amber is centred on a mid-tone for that
+  reason.
+- **True greyscale is impossible at seven classes.** It cannot hold ΔE 9 between neighbours
+  *and* clear the cream. A print/monochrome scheme would need the no-data colour moved off
+  `#fffaf0` as well, which changes how "no data" reads in every scheme — a separate decision,
+  not a fifth option.
+
+The neutral ramp used to be seven steps of emerald, and failed twice over: its two lightest
+classes were ΔE 6 apart under protanopia and deuteranopia — indistinguishable — and its
+lightest shade sat ΔE 17 from the cream, so "no value" read as "bottom of the scale".
+
+Colour is still not the only channel, which matters most in the two diverging schemes:
 
 - the equal-colour **area outlines** are on by default, and their toggle is on screen beside
   the projection radios rather than behind the Shift+D developer extras, because a control
@@ -105,6 +127,9 @@ Tab from the address bar and do not touch the mouse.
       years going past are **not** announced one by one.
 - [ ] Enter on the speed buttons changes the multiplier and the change is announced once.
 - [ ] Arrow keys move between the projection radios and the map redraws.
+- [ ] The *Colours* picker is reachable, operable from the keyboard alone, and announces
+      itself by its visible "Colours" label. Each of the four repaints the hexagons and the
+      legend bar together, and the legend note describes the scheme actually on screen.
 - [ ] Space on the outline toggle removes and restores the black class boundaries.
 - [ ] Each legend swatch announces its class number, its value span and its country count
       without the hover card being involved.
@@ -139,9 +164,12 @@ NVDA + Firefox, and VoiceOver + Safari where it is available.
 
 ### Colour
 
-- [ ] `node scripts/check_palette_contrast.mjs` passes. Run with `--verbose` for the numbers.
-- [ ] Check a real `GetMap` response, not only the CSS legend — the two lists are separate
-      files and the script is what says they agree.
+- [ ] `node scripts/build_hex_classes.mjs --check` passes — the generated mapfile classes are
+      in step with `webapp/src/core/palettes.js`.
+- [ ] `node scripts/check_palette_contrast.mjs` passes, for every scheme. Run with
+      `--verbose` for the numbers.
+- [ ] Check a real `GetMap` response per scheme, not only the CSS legend — the colours live
+      in two files and the script is what says they agree.
 - [ ] **A palette change invalidates every cached tile.** Clear the server cache and
       hard-reload, or the old ramp is served under the new legend:
       `podman exec demscore-mapcache sh -c 'rm -rf /var/cache/nginx/* && nginx -s reload'`
@@ -162,6 +190,8 @@ The states worth auditing, when it is added:
 4. a legend swatch focused
 5. the data table dialog open, and again after sorting
 6. the phone picker open
+7. each of the four colour schemes (the legend bar's contrast against the dock changes with
+   it, and nothing else does)
 
 Two things axe cannot answer, and which stay manual: whether the text equivalent of the map
 actually says what the map shows, and whether the ramps are usable. The first has no check

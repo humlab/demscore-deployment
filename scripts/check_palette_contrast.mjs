@@ -6,15 +6,17 @@
 // browser on a good monitor:
 //
 //   1. the legend and the map disagree. The legend bar is painted from
-//      `LEGEND_COLORS_*` in MapController.js; the hexagons are painted from
-//      `mapserver/hex_classes.inc`. They are two lists in two languages and
-//      nothing but this check makes them the same list.
+//      `webapp/src/core/palettes.js`; the hexagons are painted from
+//      `mapserver/hex_classes.inc`, which is generated from it by
+//      `scripts/build_hex_classes.mjs`. A hand-edited .inc, or a generator
+//      nobody ran, ships a legend that is the key to a map it does not
+//      describe -- and nothing else would catch that.
 //   2. two adjacent classes are the same colour to a reader with a common
 //      colour-vision deficiency, or in greyscale, or on a projector.
 //   3. a ramp colour collides with the no-data land colour, so "not drawn"
 //      reads as a shade the ramp ran out of.
 //
-// Run it after any change to either list:
+// Run it after any change to a colour, alongside the generator:
 //
 //   node scripts/check_palette_contrast.mjs
 //
@@ -25,9 +27,12 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+import { MAP_PALETTES, paletteBands } from "../webapp/src/core/palettes.js";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MAPFILE_CLASSES = path.join(ROOT, "mapserver", "hex_classes.inc");
 const MAP_CONTROLLER = path.join(ROOT, "webapp", "src", "controllers", "MapController.js");
+const LAND_BASEMAP_SOURCE = MAP_CONTROLLER;
 
 const VERBOSE = process.argv.includes("--verbose");
 
@@ -144,9 +149,10 @@ function simulateCvd(rgb, kind) {
 
 // ---- reading the two palettes out of the source ---------------------------
 
-// `COLOR r g b` inside the CLASSes of hex_classes.inc, grouped by the ramp the
-// class belongs to: 1-7 is the diverging ramp, 11-17 the neutral one.
-async function readMapfileRamps() {
+// Every `COLOR r g b` in hex_classes.inc, keyed by the class_idx its CLASS
+// matches on. That index is what carries the scheme: the DATA query offsets it
+// onto a band per scheme and polarity, so a band is classes base+1..base+7.
+async function readMapfileBands() {
   const text = await readFile(MAPFILE_CLASSES, "utf8");
   const byClassIndex = new Map();
   const classPattern = /EXPRESSION\s*\(\[class_idx\]\s*=\s*(\d+)\)[\s\S]*?COLOR\s+(\d+)\s+(\d+)\s+(\d+)/g;
@@ -155,32 +161,17 @@ async function readMapfileRamps() {
     const [, index, r, g, b] = match;
     byClassIndex.set(Number(index), [Number(r), Number(g), Number(b)]);
   }
-
-  const collect = (base) =>
-    Array.from({ length: 7 }, (_value, offset) => byClassIndex.get(base + offset)).filter(Boolean);
-
-  return {
-    diverging: collect(1),
-    neutral: collect(11),
-  };
+  return byClassIndex;
 }
 
-// The same two ramps as the legend bar paints them.
-async function readLegendRamps() {
-  const text = await readFile(MAP_CONTROLLER, "utf8");
-  const pick = (name) => {
-    const match = new RegExp(`const ${name}\\s*=\\s*\\[([^\\]]*)\\]`).exec(text);
-    if (!match) throw new Error(`could not find ${name} in ${MAP_CONTROLLER}`);
-    return [...match[1].matchAll(/#[0-9a-f]{6}/gi)].map((hit) => parseHex(hit[0]));
-  };
-  const landMatch = /const LAND_BASEMAP_COLOR\s*=\s*"(#[0-9a-f]{6})"/i.exec(text);
-  if (!landMatch) throw new Error(`could not find LAND_BASEMAP_COLOR in ${MAP_CONTROLLER}`);
-
-  return {
-    diverging: pick("LEGEND_COLORS_NEGATIVE"),
-    neutral: pick("LEGEND_COLORS_NEUTRAL"),
-    noData: parseHex(landMatch[1]),
-  };
+// The no-data colour is the land basemap: a country with no value for this
+// variable and year is not drawn at all, so what shows through is the land. It
+// is therefore a colour on the map that every ramp has to stay clear of.
+async function readNoDataColor() {
+  const text = await readFile(LAND_BASEMAP_SOURCE, "utf8");
+  const match = /const LAND_BASEMAP_COLOR\s*=\s*"(#[0-9a-f]{6})"/i.exec(text);
+  if (!match) throw new Error(`could not find LAND_BASEMAP_COLOR in ${LAND_BASEMAP_SOURCE}`);
+  return parseHex(match[1]);
 }
 
 // ---- checks ---------------------------------------------------------------
@@ -196,20 +187,24 @@ function heading(text) {
   console.log(`\n${text}\n${"-".repeat(text.length)}`);
 }
 
-function checkRampsAgree(rampName, fromMapfile, fromLegend) {
-  if (fromMapfile.length !== 7) {
-    fail(`${rampName}: hex_classes.inc has ${fromMapfile.length} classes, expected 7`);
-    return;
-  }
-  if (fromLegend.length !== 7) {
-    fail(`${rampName}: the legend list has ${fromLegend.length} colours, expected 7`);
-    return;
-  }
-  for (let i = 0; i < 7; i += 1) {
-    const map = toHex(fromMapfile[i]);
-    const legend = toHex(fromLegend[i]);
-    if (map !== legend) {
-      fail(`${rampName} class ${i + 1}: mapfile ${map} but legend ${legend} — the bar is lying about the map`);
+// The browser paints the legend from core/palettes.js and MapServer paints the
+// hexagons from hex_classes.inc. The .inc is generated from the .js, so this
+// only ever fails when someone has edited the generated file by hand or has
+// forgotten to run the generator -- but either of those ships a legend that is
+// the key to a map it does not describe, which nothing else would catch.
+function checkBandAgrees(bandName, base, colors, fromMapfile) {
+  for (let i = 0; i < colors.length; i += 1) {
+    const classIdx = base + i + 1;
+    const painted = fromMapfile.get(classIdx);
+    if (!painted) {
+      fail(`${bandName}: hex_classes.inc has no class ${classIdx} — run node scripts/build_hex_classes.mjs`);
+      continue;
+    }
+    if (toHex(painted) !== colors[i].toLowerCase()) {
+      fail(
+        `${bandName} class ${classIdx}: mapfile ${toHex(painted)} but palettes.js ${colors[i]} — ` +
+          "the bar is lying about the map; run node scripts/build_hex_classes.mjs",
+      );
     }
   }
 }
@@ -324,18 +319,35 @@ function checkTextTokens() {
 
 // ---- main ----------------------------------------------------------------
 
-const mapfile = await readMapfileRamps();
-const legend = await readLegendRamps();
+const mapfileBands = await readMapfileBands();
+const noData = await readNoDataColor();
+const bands = paletteBands();
+
+// Which schemes each band serves, so a failure names something a reader would
+// recognise rather than a number.
+const bandNames = new Map(
+  bands.map(([base]) => [
+    base,
+    Object.entries(MAP_PALETTES)
+      .filter(([, palette]) => palette.signed.base === base || palette.neutral.base === base)
+      .map(([key]) => key)
+      .join(" / "),
+  ]),
+);
 
 heading("legend bar vs. mapfile");
-checkRampsAgree("diverging", mapfile.diverging, legend.diverging);
-checkRampsAgree("neutral", mapfile.neutral, legend.neutral);
-if (failures.length === 0) console.log("  both ramps match the classes MapServer paints");
+for (const [base, colors] of bands) {
+  checkBandAgrees(bandNames.get(base), base, colors, mapfileBands);
+}
+if (failures.length === 0) {
+  console.log(`  all ${bands.length} bands match the classes MapServer paints`);
+}
 
-checkRamp("diverging", legend.diverging);
-checkNoData("diverging", legend.diverging, legend.noData);
-checkRamp("neutral", legend.neutral);
-checkNoData("neutral", legend.neutral, legend.noData);
+for (const [base, colors] of bands) {
+  const name = bandNames.get(base);
+  checkRamp(name, colors.map(parseHex));
+  checkNoData(name, colors.map(parseHex), noData);
+}
 
 checkTextTokens();
 

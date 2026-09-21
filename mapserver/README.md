@@ -49,7 +49,29 @@ Pass these as WMS request parameters:
   a cell anyway, displacing a neighbour that holds less of it; then `hex_inset` covers the rest.
   See the three passes in `sql/mapserver_hex_setup.sql`.
 - `hex_size`: hexagon edge size in the layer's own projected meters; local setup precomputes `20000` to `300000` in `5000` meter steps for the Equal Earth mesh and `40000` to `600000` in `10000` meter steps for the Mercator one. The web app uses `200000`, `100000`, and `50000` as zoom-responsive stops in *both* projections: both count in Web Mercator's resolution ladder, so an equal size is an equal grain on screen, and the Mercator mesh's larger cell count at a given size is the polar surplus the toggle exists to show. Three stops rather than a finer ladder because `hex_size` is a WMS dimension: crossing a stop invalidates every tile on screen, so each one is a full reload. The coarsest stop is also the mapfile default below and what `scripts/preload_mapcache_tiles.sh` warms; the three move together.
-- `polarity`: `positive` | `negative` | `neutral` (`positive` flips class colors so higher values are bluer; `neutral` uses a single-hue green ramp); read by `hex_variable` only
+- `polarity`: `positive` | `negative` | `neutral`. Which end of the scale is the unfavourable
+  one. Read by the fill and inset layers only, and only by the two diverging schemes: it picks
+  which end of their band the hexagons start from (`positive` reverses it, in SQL, as
+  `base + (8 - class_idx)`), and `neutral` sends a variable with no favourable end to a
+  sequential band instead
+- `palette`: `default` | `indigo_amber` | `viridis` | `cividis`. Which colour scheme paints the
+  hexagons. Read by the fill and inset layers only.
+
+  Colour is the map's whole encoding and about one man in twelve cannot use the red-green
+  channel the default leans on, so this is a reader's choice rather than a deployment setting.
+  It reaches MapServer as a parameter because the hexagons are rendered here, not in the
+  browser: a scheme cannot be a stylesheet.
+
+  Mechanically it is an offset on `class_idx`, which the `DATA` query applies per scheme and
+  polarity before MapServer classes on it -- see the `CASE` in the mapfile, the bands in
+  `mapserver/hex_classes.inc`, and `webapp/src/core/palettes.js`, which is the source both are
+  generated and checked from. `default` and `indigo_amber` are diverging and honour polarity;
+  `viridis` and `cividis` are sequential, always read low-to-high, and ignore it.
+
+  The web client omits the parameter entirely on `default` rather than spelling it out. The
+  two requests render identically, but they are different URLs, and both the mapcache and the
+  service worker key on the URL -- sending it would have thrown away every tile already cached
+  for everyone who never touches the control.
 
 Defaults:
 
@@ -58,6 +80,7 @@ Defaults:
 - `year=2020`
 - `hex_size=200000` (the same on the Mercator layers)
 - `polarity=negative`
+- `palette=default` (an unrecognised value falls back to this, as MapServer's `VALIDATION` does for every parameter here)
 
 ## Capabilities URL
 

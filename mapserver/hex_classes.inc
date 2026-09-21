@@ -1,24 +1,20 @@
-# The seven quantile colours, in the three orders the legend can read them.
+# GENERATED FILE -- do not edit.
 #
-# INCLUDEd by every hex fill layer rather than written out per layer: one mesh is
-# cut in Equal Earth and one in Web Mercator, and the projection a cell was cut
-# in has nothing to do with the colour it takes. class_idx is shifted by the
-# DATA query per polarity -- 1-7 negative, 8-x positive, 10+x neutral -- so the
-# bar always reads low-to-high left to right.
+# Written by scripts/build_hex_classes.mjs from webapp/src/core/palettes.js,
+# which is where the colours live and where they should be changed. Run the
+# generator after editing it; scripts/check_palette_contrast.mjs fails if this
+# file and the JavaScript have drifted apart.
 #
-# These seven RGB triples and the LEGEND_COLORS_* lists in
-# webapp/src/controllers/MapController.js are the same ramp written twice, in two
-# languages. scripts/check_palette_contrast.mjs reads both files and fails if
-# they disagree, so run it after touching either -- a legend that paints a
-# different ramp from the map is a legend that lies.
+# INCLUDEd by every hex fill layer rather than written out per layer: one mesh
+# is cut in Equal Earth and one in Web Mercator, and the projection a cell was
+# cut in has nothing to do with the colour it takes.
 #
-# The neutral ramp is viridis (trimmed to 0.15-0.85 so neither end reaches
-# near-black or the yellow that would collide with the cream no-data land). It
-# replaced a seven-step emerald ramp whose two lightest classes were delta-E 6
-# apart under protanopia and deuteranopia -- indistinguishable -- and whose
-# lightest shade sat delta-E 17 from the no-data colour, so "no value" read as
-# "bottom of the scale". Viridis is monotonic in lightness, which is what makes
-# the ramp survive greyscale and a projector as well as colour blindness.
+# Each block below is one seven-class band. The DATA query offsets class_idx
+# onto a band per colour scheme and polarity, so the class a hexagon lands in
+# carries both which scheme was asked for and which way round it reads. A band
+# is reversed in SQL (base + (8 - class_idx)) rather than written out twice.
+
+# class_idx 1-7 -- default (signed)
   CLASS
     NAME "1"
     EXPRESSION ([class_idx] = 1)
@@ -89,8 +85,9 @@
     END
   END
 
+# class_idx 11-17 -- default (unsigned); indigo_amber (unsigned); viridis (all variables)
   CLASS
-    NAME "neutral 1"
+    NAME "11"
     EXPRESSION ([class_idx] = 11)
     STYLE
       COLOR 71 45 123
@@ -100,7 +97,7 @@
   END
 
   CLASS
-    NAME "neutral 2"
+    NAME "12"
     EXPRESSION ([class_idx] = 12)
     STYLE
       COLOR 59 82 139
@@ -110,7 +107,7 @@
   END
 
   CLASS
-    NAME "neutral 3"
+    NAME "13"
     EXPRESSION ([class_idx] = 13)
     STYLE
       COLOR 44 114 142
@@ -120,7 +117,7 @@
   END
 
   CLASS
-    NAME "neutral 4"
+    NAME "14"
     EXPRESSION ([class_idx] = 14)
     STYLE
       COLOR 33 145 140
@@ -130,7 +127,7 @@
   END
 
   CLASS
-    NAME "neutral 5"
+    NAME "15"
     EXPRESSION ([class_idx] = 15)
     STYLE
       COLOR 40 174 128
@@ -140,7 +137,7 @@
   END
 
   CLASS
-    NAME "neutral 6"
+    NAME "16"
     EXPRESSION ([class_idx] = 16)
     STYLE
       COLOR 94 201 98
@@ -150,10 +147,152 @@
   END
 
   CLASS
-    NAME "neutral 7"
+    NAME "17"
     EXPRESSION ([class_idx] = 17)
     STYLE
       COLOR 173 220 48
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+# class_idx 21-27 -- indigo_amber (signed)
+  CLASS
+    NAME "21"
+    EXPRESSION ([class_idx] = 21)
+    STYLE
+      COLOR 43 42 112
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "22"
+    EXPRESSION ([class_idx] = 22)
+    STYLE
+      COLOR 74 84 168
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "23"
+    EXPRESSION ([class_idx] = 23)
+    STYLE
+      COLOR 139 147 207
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "24"
+    EXPRESSION ([class_idx] = 24)
+    STYLE
+      COLOR 196 189 176
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "25"
+    EXPRESSION ([class_idx] = 25)
+    STYLE
+      COLOR 224 163 60
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "26"
+    EXPRESSION ([class_idx] = 26)
+    STYLE
+      COLOR 178 112 15
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "27"
+    EXPRESSION ([class_idx] = 27)
+    STYLE
+      COLOR 122 71 3
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+# class_idx 31-37 -- cividis (all variables)
+  CLASS
+    NAME "31"
+    EXPRESSION ([class_idx] = 31)
+    STYLE
+      COLOR 0 45 97
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "32"
+    EXPRESSION ([class_idx] = 32)
+    STYLE
+      COLOR 34 73 110
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "33"
+    EXPRESSION ([class_idx] = 33)
+    STYLE
+      COLOR 74 90 110
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "34"
+    EXPRESSION ([class_idx] = 34)
+    STYLE
+      COLOR 112 112 109
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "35"
+    EXPRESSION ([class_idx] = 35)
+    STYLE
+      COLOR 151 144 107
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "36"
+    EXPRESSION ([class_idx] = 36)
+    STYLE
+      COLOR 193 172 96
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "37"
+    EXPRESSION ([class_idx] = 37)
+    STYLE
+      COLOR 242 223 74
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END

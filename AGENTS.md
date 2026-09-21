@@ -129,11 +129,16 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `scripts/build_variable_coverage.sh`: precomputes the variable list's coverage strips
   into `webapp/config/variable_coverage.json` (run by the setup script; rerun it after
   any load that changes which years or countries a variable covers)
-- `scripts/check_palette_contrast.mjs`: reads the seven quantile colours out of
-  `mapserver/hex_classes.inc` *and* out of `webapp/src/controllers/MapController.js`, fails if
-  the two disagree, and measures every adjacent class pair in greyscale and under simulated
-  protanopia, deuteranopia and tritanopia. Plain `node`, no dependencies. Run it after any
-  change to either list, or to the interface colour tokens it also checks
+- `scripts/build_hex_classes.mjs`: generates `mapserver/hex_classes.inc` from
+  `webapp/src/core/palettes.js`, which is where every quantile colour is written. The colours
+  have to exist in two languages -- MapServer paints the map, the browser paints the legend
+  that is the key to it -- so one is generated from the other rather than kept in step by
+  hand. `--check` fails instead of writing, for CI
+- `scripts/check_palette_contrast.mjs`: reads the colours out of `mapserver/hex_classes.inc`
+  *and* out of `webapp/src/core/palettes.js`, fails if the two disagree, and measures every
+  adjacent class pair in greyscale and under simulated protanopia, deuteranopia and
+  tritanopia. Plain `node`, no dependencies. Run it after any change to a colour, or to the
+  interface colour tokens it also checks
 - `ACCESSIBILITY.md`: what the accessibility work covers, the manual keyboard and
   screen-reader checklist to run before a release, and what is still missing
 - `sql/mapserver_hex_setup.sql`: core DB objects and hex function
@@ -203,7 +208,13 @@ Accepted parameters for `hex_variable` and `hex_outline`:
 - `variable`: alphanumeric/underscore (`^[A-Za-z0-9_]+$`)
 - `year`: four digits
 - `hex_size`: 5-7 digit integer
-- `polarity`: `positive` | `negative` | `neutral`, read by `hex_variable` only
+- `polarity`: `positive` | `negative` | `neutral`, read by the fill and inset layers only
+- `palette`: `default` | `indigo_amber` | `viridis` | `cividis`, read by the fill and inset
+  layers only. Which colour scheme paints the hexagons -- a reader's choice, not a deployment
+  setting, since colour is the map's whole encoding and about one man in twelve cannot use
+  the red-green channel the default leans on. Mechanically an offset on `class_idx` applied
+  per scheme and polarity in the `DATA` query; see `mapserver/README.md` and
+  `webapp/src/core/palettes.js`
 
 MapServer applies validation defaults; SQL additionally clamps:
 
@@ -334,16 +345,25 @@ Set cache toggle in `.env`:
 
 ### Colour changes
 
-- The seven quantile colours are written twice: `mapserver/hex_classes.inc` paints the
-  hexagons, `LEGEND_COLORS_*` in `webapp/src/controllers/MapController.js` paints the legend
-  bar that is the key to them. `scripts/check_palette_contrast.mjs` is what keeps the two
-  lists the same list, and what measures whether adjacent classes survive a colour-vision
-  deficiency or greyscale. Run it after touching either.
-- **A palette change invalidates every cached tile.** The tiles carry the colours, not just
-  the geometry, and nothing in the URL changes when a colour does, so both caches keep
-  serving the old ramp under the new legend — which is worse than either. Clear the server
-  cache (`podman exec demscore-mapcache sh -c 'rm -rf /var/cache/nginx/* && nginx -s reload'`)
-  and hard-reload the browser, whose service worker holds its own copy.
+- **`webapp/src/core/palettes.js` is where colours are written, and the only place.** It
+  defines the four schemes the reader can pick between, the seven-class bands they are built
+  from, and which `class_idx` base each band occupies. `mapserver/hex_classes.inc` is
+  *generated* from it — edit the JavaScript, run `node scripts/build_hex_classes.mjs`, never
+  edit the `.inc`. `scripts/check_palette_contrast.mjs` reads both and fails if they have
+  drifted, so a hand-edited `.inc` is caught even by someone who never runs the generator.
+- A band's `base` is permanent. It is part of every cached tile — the scheme rides in the
+  request URL and both caches key on the URL — so renumbering a band changes no URL and both
+  caches go on serving the old colours under the new legend. Add a band at a fresh base;
+  never reuse one.
+- **Changing a colour inside an existing band invalidates every cached tile for it.** The
+  tiles carry the colours, not just the geometry, and nothing in the URL changes when a colour
+  does. Clear the server cache
+  (`podman exec demscore-mapcache sh -c 'rm -rf /var/cache/nginx/* && nginx -s reload'`) and
+  hard-reload the browser, whose service worker holds its own copy.
+- Adding a scheme means: a band in `palettes.js`, the generator, a `WHEN` arm in the four
+  `DATA` strings in the mapfile, and the `palette` regex in the four `VALIDATION` blocks. The
+  client needs nothing — the picker, the legend, the cookie and the spoken summary are all
+  driven from `MAP_PALETTES`.
 
 ## 8) Quality and Safety Checklist
 
@@ -353,7 +373,8 @@ Before merging changes:
 2. Confirm `GetCapabilities` and one `GetMap` request succeed.
 3. Verify the web UI can switch dataset, variable, year, and hex size.
 4. Validate SQL changes with at least one query for each dataset (`qog`, `repdem`, `v_dem`).
-5. Run `node scripts/check_palette_contrast.mjs` if any colour moved.
+5. Run `node scripts/build_hex_classes.mjs --check` and
+   `node scripts/check_palette_contrast.mjs` if any colour moved.
 6. Run the keyboard pass in `ACCESSIBILITY.md` if any control, dialog or focus behaviour
    moved. There is no automated accessibility check yet, so that list is the check.
 
@@ -387,6 +408,15 @@ Before merging changes:
   picture shows, and nothing enforces that the two stay in step. They are held together by
   both being read from `demscore.country_scores()`; a change that colours the map from
   anything else has to bring the summary with it.
+- Each colour scheme has its own tile cache, because the scheme is in the request URL. That
+  is what keeps them from serving each other's colours, but it also means the mapcache
+  warm-up (`scripts/preload_mapcache_tiles.sh`) and the in-browser read-ahead cover one
+  scheme at a time: switching schemes is a cold cache until it refills. The default scheme
+  sends no `palette` parameter at all, so the tiles everyone who never touches the control
+  gets are the ones that were already cached before the control existed.
+- Both diverging schemes are non-monotonic in lightness: `default` and `indigo_amber` each
+  have two classes that print as the same grey. A reader who cannot use hue at all wants a
+  sequential scheme, which is what `viridis` and `cividis` are there for.
 - The diverging ramp is not monotonic in lightness: classes 2 and 7 print as the same grey.
   That is inherent to a diverging scheme and is the price of keeping polarity direction in
   the colour. What answers it is the equal-colour area outlines (on by default, and the

@@ -41,7 +41,7 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -57,11 +57,13 @@ MAP
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
       "polarity" "^(positive|negative|neutral)$"
+      "palette" "^(default|indigo_amber|viridis|cividis)$"
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
       "default_hex_size" "200000"
       "default_polarity" "negative"
+      "default_palette" "default"
     END
 
     INCLUDE "hex_classes.inc"
@@ -90,7 +92,7 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -106,11 +108,13 @@ MAP
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
       "polarity" "^(positive|negative|neutral)$"
+      "palette" "^(default|indigo_amber|viridis|cividis)$"
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
       "default_hex_size" "200000"
       "default_polarity" "negative"
+      "default_palette" "default"
     END
 
     INCLUDE "hex_classes.inc"
@@ -197,7 +201,7 @@ MAP
       "init=epsg:3857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -213,11 +217,13 @@ MAP
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
       "polarity" "^(positive|negative|neutral)$"
+      "palette" "^(default|indigo_amber|viridis|cividis)$"
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
       "default_hex_size" "200000"
       "default_polarity" "negative"
+      "default_palette" "default"
     END
 
     INCLUDE "hex_classes.inc"
@@ -234,7 +240,7 @@ MAP
       "init=epsg:3857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -250,11 +256,13 @@ MAP
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
       "polarity" "^(positive|negative|neutral)$"
+      "palette" "^(default|indigo_amber|viridis|cividis)$"
       "default_dataset" "v_dem"
       "default_variable" "v2x_polyarchy"
       "default_year" "2020"
       "default_hex_size" "200000"
       "default_polarity" "negative"
+      "default_palette" "default"
     END
 
     INCLUDE "hex_classes.inc"
