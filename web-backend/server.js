@@ -7,7 +7,7 @@ const { Pool } = require("pg");
 const PORT = Number.parseInt(process.env.PORT || "8091", 10);
 const CONFIG_DIR = process.env.CONFIG_DIR || path.join(__dirname, "webapp-config");
 const REFERENCE_DATA_DIR = process.env.REFERENCE_DATA_DIR || path.join(__dirname, "..", "data", "reference");
-const LAND_BASEMAP_FILE = "ne_110m_admin_0_countries.geojson";
+const LAND_BASEMAP_FILE = "ne_50m_admin_0_countries.geojson";
 const WMS_BASE_PATH = "/mapserver?map=/etc/mapserver/mapserver.map";
 const CACHE_ENABLED = isTruthy(process.env.DEMSCORE_ENABLE_MAPCACHE || "0");
 
@@ -466,7 +466,19 @@ async function getClassBreaks(dataset, variable, year) {
        ORDER BY class_idx;`,
       [dataset, variable, year],
     ),
-    pool.query("SELECT count(*)::INT AS total FROM demscore.countries;"),
+    pool.query(
+      `WITH scores AS (
+         SELECT country_id
+         FROM demscore.country_scores($1, $2, $3)
+       )
+       SELECT count(*)::INT AS total
+       FROM demscore.countries c
+       WHERE c.source = 'natural_earth'
+          OR EXISTS (
+            SELECT 1 FROM scores s WHERE s.country_id = c.id
+          );`,
+      [dataset, variable, year],
+    ),
   ]);
 
   const classList = classes.rows.map((row) => ({
@@ -483,29 +495,37 @@ async function getClassBreaks(dataset, variable, year) {
   };
 }
 
-// The map as a table: one row per country on the map, whether or not this
-// variable and year gave it a value.
+// The map as a table: one row per current Natural Earth country, plus any
+// historical CShapes country that has data for this variable-year.
 //
 // A WMS tile is a picture, and no assistive technology can be asked what a
 // hexagon stands for, so this is the map's non-visual equivalent rather than a
-// convenience export. It is deliberately the whole country table and not only
-// the countries with data: "Somalia is not shown for 2020" is as much of a
-// reading as a number is, and a table that quietly omitted it would look
-// complete while being wrong.
+// convenience export. It deliberately keeps current countries with no data:
+// "Somalia is not shown for 2020" is as much of a reading as a number is, and a
+// table that quietly omitted it would look complete while being wrong. Historical
+// rows are different: keeping every CShapes period in every current-year table
+// would make the no-data universe unreadable, so those rows enter only when the
+// selected data maps to them.
 //
 // Same source as everything else the map draws -- demscore.country_scores() --
 // so a value here is the value that country's hexagons were coloured by.
 async function getMapData(dataset, variable, year) {
   const result = await pool.query(
-    `SELECT
+    `WITH scores AS (
+       SELECT *
+       FROM demscore.country_scores($1, $2, $3)
+     )
+     SELECT
        c.name AS country,
        NULLIF(trim(c.iso_a3), '') AS iso3,
        cs.value::DOUBLE PRECISION AS value,
        cs.class_idx::INT AS class_idx
      FROM demscore.countries c
-     LEFT JOIN demscore.country_scores($1, $2, $3) cs
+     LEFT JOIN scores cs
        ON cs.country_id = c.id
-     ORDER BY c.name;`,
+     WHERE c.source = 'natural_earth'
+        OR cs.country_id IS NOT NULL
+     ORDER BY c.name, c.valid_from_year NULLS LAST;`,
     [dataset, variable, year],
   );
 

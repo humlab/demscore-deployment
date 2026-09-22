@@ -64,12 +64,15 @@ The system turns tabular democracy indicator data into a thematic global hex map
      `(basic)` suffixes away again without editing this rule
    - a clean run ends with `unmatched_rows = 0`; anything else is a variable the web client can
      only show as its raw key, with no hover card
-4. Two Natural Earth layers are imported by `ogr2ogr` in `scripts/setup_mapserver_hex_service.sh`:
-   - `demscore.countries_src` from `ne_110m_admin_0_countries.geojson` — country identity
+4. Reference boundaries are imported by `ogr2ogr` in `scripts/setup_mapserver_hex_service.sh`:
+   - `demscore.countries_src` from `ne_50m_admin_0_countries.geojson` — country identity
      (name, ISO codes) and the untrimmed outline
-   - `demscore.country_units_src` from `ne_110m_admin_0_map_units.geojson` — the same
+   - `demscore.country_units_src` from `ne_50m_admin_0_map_units.geojson` — the same
      sovereigns split into geographic units, which is what makes overseas territories
      separable from the mainland
+   - `demscore.cshapes_src` from `CShapes-2.0.geojson` — time-bounded historical country
+     geometry for source observations whose country-year unit no longer exists in Natural
+     Earth's current-country layer
 5. `sql/mapserver_hex_setup.sql`:
    - normalizes country geometry into `demscore.countries` (4326 + 8857), taking identity
      from `countries_src` and geometry from the map units dissolved per `adm0_a3`, minus
@@ -78,7 +81,10 @@ The system turns tabular democracy indicator data into a thematic global hex map
      territories an ocean away; with it, France is metropolitan France plus Corsica.
      Sovereigns drawn as a single unit are always kept, so Western Sahara (`SAH`/`ESH`)
      and South Sudan (`SDS`/`SSD`) survive despite `adm0_a3` differing from their ISO code.
-   - remaps `demscore.dataset_values.country_id` to the current country table (ISO3 first, then name fallback)
+  - remaps `demscore.dataset_values.country_id` to the country table using ISO3 first, exact
+    current-country name second, then `demscore.country_aliases` for curated current-name and
+    CShapes historical matches; rows still unmatched are kept and summarized in
+    `demscore.dataset_value_unmapped_audit`, never silently deleted
    - precomputes hex meshes into `demscore.hex_mesh` for supported hex sizes
    - precomputes `demscore.hex_borders`, one row per mesh per pair of neighbouring countries
      (and one per country for the edges facing nothing), holding the hexagon edges between
@@ -171,8 +177,11 @@ The system turns tabular democracy indicator data into a thematic global hex map
   configs; the same `/mapserver` route passes through or caches tiles based on
   `DEMSCORE_ENABLE_MAPCACHE`
 - `data/`: input datasets + reference boundaries
-- `data/reference/`: Natural Earth boundaries — `ne_110m_admin_0_countries.geojson`
-  (identity + web-backend land basemap) and `ne_110m_admin_0_map_units.geojson` (hex geometry)
+- `data/reference/`: Natural Earth 50m boundaries — `ne_50m_admin_0_countries.geojson`
+  (identity + web-backend land basemap), `ne_50m_admin_0_map_units.geojson` (hex geometry),
+  and `ne_50m_admin_0_tiny_countries.geojson` (point support for countries too small to
+  read well as polygons). `CShapes-2.0.geojson` adds historical country geometry for
+  country-year observations that cannot honestly be drawn on current borders
 
 ## 5) Runtime Interfaces
 
@@ -262,6 +271,13 @@ Set cache toggle in `.env`:
 
 - Loader is the canonical ingest path: it recreates `demscore.variables` and `demscore.dataset_values` from CSV headers.
 - `demscore.dataset_values` is the normalized value layer. If dataset column names change, update loader extraction logic first.
+- `demscore.country_aliases` is the curated country crosswalk. Use it for explicit source-name
+  or source-code fixes such as REPDEM `Czechia -> CZE`, and for historical mappings into
+  CShapes `gwcode`s. Do not map historical countries onto successor states unless the product
+  requirement explicitly chooses that aggregation.
+- `demscore.dataset_value_unmapped_audit` is rebuilt by map setup and is the required report
+  for source observations that still cannot be represented. A non-empty audit table is allowed
+  only when the remaining entities are understood and documented.
 - `demscore.variable_metadata` is the UI-facing dictionary layer (human titles, citations, descriptions, provenance).
 - `demscore.variable_metadata_raw` is a refreshable staging table for parsed codebook output.
 - `demscore.hex_mesh` stores precomputed geometry for `hex_size` values 20000..300000 (step 5000).

@@ -41,7 +41,7 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' AND '%polarity%' = 'neutral' THEN (50 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (40 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -92,7 +92,7 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' AND '%polarity%' = 'neutral' THEN (50 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (40 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -124,13 +124,11 @@ MAP
   # layer of its own rather than a style on hex_variable, so the client can ask
   # for it by naming both layers in LAYERS and drop it by naming only the first.
   #
-  # demscore.hex_borders holds every hexagon edge that could ever separate two
-  # colours, precomputed per mesh in sql/mapserver_hex_setup.sql; the request
-  # only has to keep the ones where the two sides landed in different classes.
-  # A country with no value for this year is absent from country_scores, so its
-  # side reads as a NULL class -- which IS DISTINCT FROM every real class, and
-  # from NULL on the far side of a coastline edge it is not, so an area that is
-  # not drawn is not outlined either.
+  # The edge set is derived from the rendered country_scores() rows for this
+  # request. That matters now that CShapes historical countries can overlap
+  # Natural Earth current countries: a precomputed all-country border table would
+  # see several countries touching the same grid edge and drop it as ambiguous,
+  # even when only one of those countries is actually rendered for this year.
   #
   # Class, not value, decides: two countries the legend paints the same shade are
   # one area whatever their underlying numbers. Polarity only relabels the
@@ -145,7 +143,7 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (WITH scores AS (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), raw_segments AS (SELECT hm.country_id, s.class_idx, (ST_DumpSegments(hm.geom)).geom AS geom FROM demscore.hex_mesh hm JOIN scores s ON s.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!)), directed AS (SELECT country_id, class_idx, CASE WHEN (ST_X(ST_StartPoint(geom)), ST_Y(ST_StartPoint(geom))) <= (ST_X(ST_EndPoint(geom)), ST_Y(ST_EndPoint(geom))) THEN geom ELSE ST_Reverse(geom) END AS geom FROM raw_segments), edges AS (SELECT geom, count(*) AS hex_count, count(DISTINCT class_idx) AS class_count FROM directed GROUP BY geom), outline AS (SELECT row_number() OVER () AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 8857) AS geom FROM edges WHERE hex_count = 1 OR class_count > 1) SELECT id, geom FROM outline WHERE ST_Intersects(geom, !BOX!)) AS ho USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -201,7 +199,7 @@ MAP
       "init=epsg:3857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' AND '%polarity%' = 'neutral' THEN (50 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (40 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND NOT hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -240,7 +238,7 @@ MAP
       "init=epsg:3857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (10 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' AND '%polarity%' = 'neutral' THEN (50 + cs.class_idx) WHEN '%polarity%' = 'neutral' THEN (40 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' = 'positive' THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND hm.inset AND ST_Intersects(hm.geom, !BOX!)) AS hi USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -278,7 +276,7 @@ MAP
       "init=epsg:3857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (SELECT hb.id, hb.geom FROM demscore.hex_borders_mercator hb LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) a ON a.country_id = hb.country_a LEFT JOIN demscore.country_scores('%dataset%','%variable%',%year%) b ON b.country_id = hb.country_b WHERE hb.hex_size_m = %hex_size% AND a.class_idx IS DISTINCT FROM b.class_idx AND ST_Intersects(hb.geom, !BOX!)) AS ho USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (WITH scores AS (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), raw_segments AS (SELECT hm.country_id, s.class_idx, (ST_DumpSegments(hm.geom)).geom AS geom FROM demscore.hex_mesh_mercator hm JOIN scores s ON s.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!)), directed AS (SELECT country_id, class_idx, CASE WHEN (ST_X(ST_StartPoint(geom)), ST_Y(ST_StartPoint(geom))) <= (ST_X(ST_EndPoint(geom)), ST_Y(ST_EndPoint(geom))) THEN geom ELSE ST_Reverse(geom) END AS geom FROM raw_segments), edges AS (SELECT geom, count(*) AS hex_count, count(DISTINCT class_idx) AS class_count FROM directed GROUP BY geom), outline AS (SELECT row_number() OVER () AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 3857) AS geom FROM edges WHERE hex_count = 1 OR class_count > 1) SELECT id, geom FROM outline WHERE ST_Intersects(geom, !BOX!)) AS ho USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA

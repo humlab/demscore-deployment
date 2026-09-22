@@ -85,7 +85,7 @@
     END
   END
 
-# class_idx 11-17 -- default (unsigned); indigo_amber (unsigned); viridis (all variables)
+# class_idx 11-17 -- viridis (all variables)
   CLASS
     NAME "11"
     EXPRESSION ([class_idx] = 11)
@@ -293,6 +293,148 @@
     EXPRESSION ([class_idx] = 37)
     STYLE
       COLOR 242 223 74
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+# class_idx 41-47 -- default (unsigned)
+  CLASS
+    NAME "41"
+    EXPRESSION ([class_idx] = 41)
+    STYLE
+      COLOR 0 0 4
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "42"
+    EXPRESSION ([class_idx] = 42)
+    STYLE
+      COLOR 75 17 119
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "43"
+    EXPRESSION ([class_idx] = 43)
+    STYLE
+      COLOR 124 35 134
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "44"
+    EXPRESSION ([class_idx] = 44)
+    STYLE
+      COLOR 183 55 121
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "45"
+    EXPRESSION ([class_idx] = 45)
+    STYLE
+      COLOR 237 121 83
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "46"
+    EXPRESSION ([class_idx] = 46)
+    STYLE
+      COLOR 251 186 114
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "47"
+    EXPRESSION ([class_idx] = 47)
+    STYLE
+      COLOR 252 253 191
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+# class_idx 51-57 -- indigo_amber (unsigned)
+  CLASS
+    NAME "51"
+    EXPRESSION ([class_idx] = 51)
+    STYLE
+      COLOR 43 42 112
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "52"
+    EXPRESSION ([class_idx] = 52)
+    STYLE
+      COLOR 74 84 168
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "53"
+    EXPRESSION ([class_idx] = 53)
+    STYLE
+      COLOR 120 137 192
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "54"
+    EXPRESSION ([class_idx] = 54)
+    STYLE
+      COLOR 174 182 201
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "55"
+    EXPRESSION ([class_idx] = 55)
+    STYLE
+      COLOR 215 194 145
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "56"
+    EXPRESSION ([class_idx] = 56)
+    STYLE
+      COLOR 237 170 69
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+  CLASS
+    NAME "57"
+    EXPRESSION ([class_idx] = 57)
+    STYLE
+      COLOR 244 223 106
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END

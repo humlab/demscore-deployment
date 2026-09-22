@@ -98,6 +98,8 @@ services:
       - mapserver
     environment:
       DEMSCORE_ENABLE_MAPCACHE: ${DEMSCORE_ENABLE_MAPCACHE:-0}
+      DEMSCORE_MAPCACHE_MAX_SIZE: ${DEMSCORE_MAPCACHE_MAX_SIZE:-100g}
+      DEMSCORE_MAPCACHE_TTL_SECONDS: ${DEMSCORE_MAPCACHE_TTL_SECONDS:-43200}
     command:
       - sh
       - -lc
@@ -111,7 +113,10 @@ services:
             ;;
         esac
         resolver=$$(awk '/^nameserver/{print $$2; exit}' /etc/resolv.conf)
-        sed "s/@DNS_RESOLVER@/$$resolver/g" "$$config" > /tmp/nginx.conf
+        sed -e "s/@DNS_RESOLVER@/$$resolver/g" \
+            -e "s/@MAPCACHE_MAX_SIZE@/${DEMSCORE_MAPCACHE_MAX_SIZE:-100g}/g" \
+            -e "s/@MAPCACHE_TTL_SECONDS@/${DEMSCORE_MAPCACHE_TTL_SECONDS:-43200}/g" \
+            "$$config" > /tmp/nginx.conf
         exec nginx -c /tmp/nginx.conf -g "daemon off;"
     volumes:
       - ./mapcache:/etc/demscore-mapcache:ro
