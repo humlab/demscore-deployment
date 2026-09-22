@@ -92,9 +92,8 @@ is off by 6.3km, which is 0.2px at the world view and 2.6px at `MAX_ZOOM`. Eight
 out of 10 360 exceed 1px even at the deepest zoom. Not worth a densify step at this data
 resolution -- re-measure before adding one if the basemap ever gets finer.
 
-## Known, unrelated
+## Cache preloader follow-up
 
-`scripts/preload_mapcache_tiles.sh` warms `LAYERS=hex_variable` while the app requests
-`hex_variable,hex_outline`. The nginx cache keys on the full request URI, so the warmed
-entries are not the ones the app asks for. This predates the projection work and was left
-alone; it is a one-word fix but it changes how much the preloader writes.
+`scripts/preload_mapcache_tiles.sh` now warms the app's layer group for each projection
+(`hex_variable,hex_inset,hex_outline` or the Mercator equivalents) and includes the
+palette and polarity dimensions that participate in the browser's WMS URLs.

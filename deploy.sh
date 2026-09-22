@@ -19,6 +19,10 @@ usage() {
   echo "  start     Start services (reads existing .env)"
   echo "  stop      Stop all services"
   echo "  status    Show service status"
+  echo "  preload N Preload mapcache zoom levels 1..N"
+  echo ""
+  echo "Shortcuts:"
+  echo "  --preload N  Same as: preload N"
   exit 1
 }
 
@@ -108,6 +112,24 @@ cmd_status() {
   podman compose ps
 }
 
+cmd_preload() {
+  local levels="${1:-}"
+
+  if [[ -z "$levels" ]]; then
+    echo "ERROR: preload requires a zoom level count, e.g. ./deploy.sh --preload 2" >&2
+    exit 1
+  fi
+
+  if ! [[ "$levels" =~ ^[0-9]+$ ]] || (( levels < 1 )); then
+    echo "ERROR: preload level count must be a positive integer." >&2
+    exit 1
+  fi
+
+  shift
+  check_deps
+  ./scripts/preload_mapcache_tiles.sh --zoom-min 1 --zoom-max "$levels" "$@"
+}
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -117,5 +139,7 @@ case "${1:-}" in
   start)   cmd_start ;;
   stop)    cmd_stop ;;
   status)  cmd_status ;;
+  preload) shift; cmd_preload "$@" ;;
+  --preload) shift; cmd_preload "$@" ;;
   *)       usage ;;
 esac

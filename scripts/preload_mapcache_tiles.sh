@@ -26,6 +26,8 @@ Options:
   --tile-size N          WMS tile WIDTH/HEIGHT in pixels (default: 512)
   --hex-size N           hex_size WMS parameter (default: the world stop of the
                          app's ladder, 200000 in either projection)
+  --palette LIST         Comma-separated palette filter (default: all app
+                         palettes: default,indigo_amber,viridis,cividis)
   --latest-year-only     Warm only each variable's latest available year
   --dataset LIST         Comma-separated dataset filter (e.g. qog,repdem)
   --max-requests N       Stop after N requests (for smoke testing)
@@ -36,6 +38,10 @@ Environment knobs:
   MAPCACHE_BASE_URL      Default: http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map
   PGUSER                 Default: demscore
   PGDATABASE             Default: demscore
+
+If node is available, variable polarity is resolved from
+webapp/config/variable_polarity.json to match the browser's WMS URLs. Without
+node, the script warms all three polarity URLs for each variable/year.
 USAGE
 }
 
@@ -51,6 +57,7 @@ ZOOM_MAX=4
 TILE_SIZE=512
 PROJECTION=equalearth
 HEX_SIZE=""
+PALETTE_FILTER="default,indigo_amber,viridis,cividis"
 LATEST_YEAR_ONLY=0
 DATASET_FILTER=""
 MAX_REQUESTS=0
@@ -66,6 +73,8 @@ while [[ $# -gt 0 ]]; do
       TILE_SIZE="$2"; shift 2 ;;
     --hex-size)
       HEX_SIZE="$2"; shift 2 ;;
+    --palette)
+      PALETTE_FILTER="$2"; shift 2 ;;
     --projection)
       PROJECTION="$2"; shift 2 ;;
     --latest-year-only)
@@ -160,7 +169,7 @@ case "$PROJECTION" in
     WORLD_HALF_X=17243959.06221695
     WORLD_HALF_Y=8392927.598466456
     WORLD_SRS="EPSG:8857"
-    FILL_LAYER="hex_variable"
+    LAYER_NAMES="hex_variable,hex_inset,hex_outline"
     # The coarsest stop in the web app's ladder -- see HEX_ZOOM_THRESHOLDS in
     # webapp/src/core/projection.js. Warming any other size warms tiles the app
     # does not ask for at the world view.
@@ -170,7 +179,7 @@ case "$PROJECTION" in
     WORLD_HALF_X=20037508.342789244
     WORLD_HALF_Y=20037508.342789244
     WORLD_SRS="EPSG:3857"
-    FILL_LAYER="hex_variable_mercator"
+    LAYER_NAMES="hex_variable_mercator,hex_inset_mercator,hex_outline_mercator"
     # The same stop as Equal Earth, deliberately: both projections count in the
     # same resolution ladder, so an equal size is an equal grain on screen --
     # see hexResolutionStops in webapp/src/core/projection.js.
@@ -185,6 +194,27 @@ if ! [[ "$HEX_SIZE" =~ ^[0-9]+$ ]]; then
   echo "--hex-size must be a non-negative integer." >&2
   exit 1
 fi
+
+IFS=',' read -r -a PALETTES <<< "$PALETTE_FILTER"
+VALIDATED_PALETTES=()
+for palette in "${PALETTES[@]}"; do
+  palette="$(printf '%s' "$palette" | awk '{gsub(/^ +| +$/, "", $0); print}')"
+  [[ -n "$palette" ]] || continue
+  case "$palette" in
+    default|indigo_amber|viridis|cividis)
+      VALIDATED_PALETTES+=("$palette")
+      ;;
+    *)
+      echo "Unknown palette: $palette (expected default, indigo_amber, viridis or cividis)" >&2
+      exit 1
+      ;;
+  esac
+done
+
+if (( ${#VALIDATED_PALETTES[@]} == 0 )); then
+  echo "--palette was provided but no valid palette values were parsed." >&2
+  exit 1
+fi
 # The Web Mercator resolution ladder, which both projections use: the web app
 # pins its zoom to these same metres-per-pixel so a zoom level means one scale
 # whichever world is underneath it.
@@ -194,6 +224,7 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 TILES_FILE="$TMP_DIR/tiles.tsv"
+RAW_COMBOS_FILE="$TMP_DIR/combos_raw.tsv"
 COMBOS_FILE="$TMP_DIR/combos.tsv"
 FAILURES_FILE="$TMP_DIR/failures.tsv"
 
@@ -246,10 +277,79 @@ GROUP BY v.dataset, v.variable, dv.year"
   printf '%b' "$sql"
 }
 
+annotate_polarities() {
+  local polarity_file="$ROOT_DIR/webapp/config/variable_polarity.json"
+
+  if command -v node >/dev/null 2>&1 && [[ -f "$polarity_file" ]]; then
+    node --input-type=module - "$RAW_COMBOS_FILE" "$polarity_file" > "$COMBOS_FILE" <<'NODE'
+import fs from "node:fs";
+
+const [, , combosPath, polarityPath] = process.argv;
+const rawCombos = fs.readFileSync(combosPath, "utf8").trimEnd();
+const polarityMeta = JSON.parse(fs.readFileSync(polarityPath, "utf8"));
+const values = new Set(["positive", "negative", "neutral"]);
+
+const valid = (value) => values.has(value);
+const defaultPolarity = valid(polarityMeta?.defaults?.polarity)
+  ? polarityMeta.defaults.polarity
+  : "negative";
+const datasetDefaults = polarityMeta?.dataset_defaults && typeof polarityMeta.dataset_defaults === "object"
+  ? polarityMeta.dataset_defaults
+  : {};
+const variableOverrides = polarityMeta?.variable_overrides && typeof polarityMeta.variable_overrides === "object"
+  ? polarityMeta.variable_overrides
+  : {};
+const rules = Array.isArray(polarityMeta?.rules)
+  ? polarityMeta.rules
+      .map((rule) => {
+        try {
+          return {
+            dataset: rule.dataset,
+            polarity: rule.polarity,
+            regex: typeof rule.match === "string" && rule.match ? new RegExp(rule.match) : null,
+          };
+        } catch {
+          return null;
+        }
+      })
+      .filter((rule) => rule?.regex && valid(rule.polarity))
+  : [];
+
+function resolvePolarity(dataset, variable) {
+  const override = variableOverrides?.[dataset]?.[variable];
+  if (valid(override)) return override;
+
+  const matchingRule = rules.find((rule) => {
+    const datasetMatches = !rule.dataset || rule.dataset === dataset;
+    return datasetMatches && rule.regex.test(variable);
+  });
+  if (matchingRule) return matchingRule.polarity;
+
+  const datasetDefault = datasetDefaults?.[dataset];
+  if (valid(datasetDefault)) return datasetDefault;
+
+  return defaultPolarity;
+}
+
+if (rawCombos.length > 0) {
+  for (const line of rawCombos.split("\n")) {
+    const [dataset, variable, year] = line.split("\t");
+    if (!dataset || !variable || !year) continue;
+    console.log([dataset, variable, year, resolvePolarity(dataset, variable)].join("\t"));
+  }
+}
+NODE
+  else
+    echo "node or webapp/config/variable_polarity.json not available; warming all polarity URLs." >&2
+    awk -F'\t' 'BEGIN { OFS="\t" } NF >= 3 { print $1, $2, $3, "negative"; print $1, $2, $3, "positive"; print $1, $2, $3, "neutral" }' "$RAW_COMBOS_FILE" > "$COMBOS_FILE"
+  fi
+}
+
 build_tiles
 
 SQL_QUERY="$(build_sql)"
-podman compose exec -T db psql -U "$PGUSER" -d "$PGDATABASE" -At -F $'\t' -c "$SQL_QUERY" > "$COMBOS_FILE"
+podman compose exec -T db psql -U "$PGUSER" -d "$PGDATABASE" -At -F $'\t' -c "$SQL_QUERY" > "$RAW_COMBOS_FILE"
+annotate_polarities
 
 combo_count=$(wc -l < "$COMBOS_FILE" | tr -d ' ')
 tile_count=$(wc -l < "$TILES_FILE" | tr -d ' ')
@@ -264,7 +364,8 @@ if (( tile_count == 0 )); then
   exit 1
 fi
 
-total_requests=$((combo_count * tile_count))
+palette_count=${#VALIDATED_PALETTES[@]}
+total_requests=$((combo_count * tile_count * palette_count))
 if (( MAX_REQUESTS > 0 && MAX_REQUESTS < total_requests )); then
   planned_requests=$MAX_REQUESTS
 else
@@ -275,7 +376,9 @@ echo "Preloading mapcache tiles"
 echo "- zoom range: ${ZOOM_MIN}-${ZOOM_MAX}"
 echo "- tile size: ${TILE_SIZE}x${TILE_SIZE}"
 echo "- hex_size: ${HEX_SIZE}"
-echo "- combos (dataset/variable/year): ${combo_count}"
+echo "- layers: ${LAYER_NAMES}"
+echo "- palettes: ${VALIDATED_PALETTES[*]}"
+echo "- combos (dataset/variable/year/polarity): ${combo_count}"
 echo "- tiles per combo: ${tile_count}"
 echo "- planned requests: ${planned_requests}"
 if (( DRY_RUN == 1 )); then
@@ -286,36 +389,42 @@ request_idx=0
 success_count=0
 fail_count=0
 
-while IFS=$'\t' read -r dataset variable year; do
-  while IFS=$'\t' read -r z x y xmin ymin xmax ymax; do
-    if (( MAX_REQUESTS > 0 && request_idx >= MAX_REQUESTS )); then
-      break 2
+while IFS=$'\t' read -r dataset variable year polarity; do
+  for palette in "${VALIDATED_PALETTES[@]}"; do
+    palette_param=""
+    if [[ "$palette" != "default" || "$polarity" == "neutral" ]]; then
+      palette_param="&palette=${palette}"
     fi
-    request_idx=$((request_idx + 1))
-
-    url="${MAPCACHE_BASE_URL}${QUERY_JOIN}SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${FILL_LAYER}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=${WORLD_SRS}&BBOX=${xmin},${ymin},${xmax},${ymax}&WIDTH=${TILE_SIZE}&HEIGHT=${TILE_SIZE}&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=${HEX_SIZE}"
-
-    if (( DRY_RUN == 1 )); then
-      if (( request_idx <= 20 )); then
-        echo "[dry-run ${request_idx}] ${dataset}.${variable} year=${year} z=${z} x=${x} y=${y}"
-      elif (( request_idx == 21 )); then
-        echo "[dry-run] ... output truncated after 20 requests"
+    while IFS=$'\t' read -r z x y xmin ymin xmax ymax; do
+      if (( MAX_REQUESTS > 0 && request_idx >= MAX_REQUESTS )); then
+        break 3
       fi
-      success_count=$((success_count + 1))
-      continue
-    fi
+      request_idx=$((request_idx + 1))
 
-    if curl -fsS --max-time 60 --output /dev/null "$url"; then
-      success_count=$((success_count + 1))
-    else
-      fail_count=$((fail_count + 1))
-      printf "%s\t%s\t%s\t%s\t%s\t%s\n" "$dataset" "$variable" "$year" "$z" "$x" "$y" >> "$FAILURES_FILE"
-    fi
+      url="${MAPCACHE_BASE_URL}${QUERY_JOIN}SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=${LAYER_NAMES}&STYLES=&FORMAT=image/png&TRANSPARENT=true&SRS=${WORLD_SRS}&BBOX=${xmin},${ymin},${xmax},${ymax}&WIDTH=${TILE_SIZE}&HEIGHT=${TILE_SIZE}&dataset=${dataset}&variable=${variable}&polarity=${polarity}&year=${year}&hex_size=${HEX_SIZE}${palette_param}"
 
-    if (( request_idx % 500 == 0 )) || (( request_idx == planned_requests )); then
-      echo "Progress: ${request_idx}/${planned_requests} (ok=${success_count}, failed=${fail_count})"
-    fi
-  done < "$TILES_FILE"
+      if (( DRY_RUN == 1 )); then
+        if (( request_idx <= 20 )); then
+          echo "[dry-run ${request_idx}] ${dataset}.${variable} year=${year} polarity=${polarity} palette=${palette} z=${z} x=${x} y=${y}"
+        elif (( request_idx == 21 )); then
+          echo "[dry-run] ... output truncated after 20 requests"
+        fi
+        success_count=$((success_count + 1))
+        continue
+      fi
+
+      if curl -fsS --max-time 60 --output /dev/null "$url"; then
+        success_count=$((success_count + 1))
+      else
+        fail_count=$((fail_count + 1))
+        printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$dataset" "$variable" "$year" "$polarity" "$palette" "$z" "$x" "$y" >> "$FAILURES_FILE"
+      fi
+
+      if (( request_idx % 500 == 0 )) || (( request_idx == planned_requests )); then
+        echo "Progress: ${request_idx}/${planned_requests} (ok=${success_count}, failed=${fail_count})"
+      fi
+    done < "$TILES_FILE"
+  done
 done < "$COMBOS_FILE"
 
 echo "Done."
@@ -324,7 +433,7 @@ echo "- successful: ${success_count}"
 echo "- failed: ${fail_count}"
 
 if (( fail_count > 0 )); then
-  echo "Failure samples (dataset, variable, year, z, x, y):"
+  echo "Failure samples (dataset, variable, year, polarity, palette, z, x, y):"
   head -n 20 "$FAILURES_FILE"
   exit 2
 fi

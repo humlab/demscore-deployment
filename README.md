@@ -26,6 +26,9 @@ starts all services, loads the datasets, and sets up the map-ready DB objects.
 The web app is then available at `http://127.0.0.1:8090`.
 
 Other commands: `./deploy.sh start`, `./deploy.sh stop`, `./deploy.sh status`.
+With map caching enabled and services running, `./deploy.sh --preload 2`
+preloads zoom levels 1 and 2 for every dataset/variable/year combination
+across all colour schemes.
 
 To enable server/browser WMS tile caching, set `DEMSCORE_ENABLE_MAPCACHE=1`
 in `.env` before starting. `DEMSCORE_MAPCACHE_MAX_SIZE` (default `100g`)
@@ -46,8 +49,8 @@ it's re-rendered from the database.
   year, all four colour schemes, both projections and all hex sizes would
   need **roughly 1.2 TB** (measured at ~44 KB/tile average, ~28M tiles);
   ordinary usage stays far below that, but the 100 GB default is sized to
-  comfortably hold most of what real traffic would ever request. There is no
-  automated cache warm-up step yet.
+  comfortably hold most of what real traffic would ever request. Use
+  `./deploy.sh --preload N` for a bounded warm-up of the first `N` zoom levels.
 - No automated test suite exists yet; `scripts/setup_mapserver_hex_service.sh`
   provides operational smoke tests (DB readiness, WMS `GetCapabilities` and
   `GetMap`).
