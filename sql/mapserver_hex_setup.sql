@@ -13,6 +13,9 @@ BEGIN
   IF to_regclass('demscore.country_units_src') IS NULL THEN
     RAISE EXCEPTION 'Missing table demscore.country_units_src. Run scripts/setup_mapserver_hex_service.sh to import Natural Earth map units.';
   END IF;
+  IF to_regclass('demscore.cshapes_src') IS NULL THEN
+    RAISE EXCEPTION 'Missing table demscore.cshapes_src. Run scripts/setup_mapserver_hex_service.sh to import CShapes historical boundaries.';
+  END IF;
 END;
 $$;
 
@@ -27,6 +30,55 @@ DROP TABLE IF EXISTS demscore.hex_mesh_mercator;
 DROP TABLE IF EXISTS demscore.hex_borders;
 DROP TABLE IF EXISTS demscore.hex_mesh;
 DROP TABLE IF EXISTS demscore.countries;
+DROP TABLE IF EXISTS demscore.dataset_value_unmapped_audit;
+DROP TABLE IF EXISTS demscore.country_aliases;
+
+CREATE TABLE demscore.country_aliases (
+  id BIGSERIAL PRIMARY KEY,
+  dataset TEXT NOT NULL,
+  source_iso3 TEXT,
+  source_name TEXT,
+  target_source TEXT NOT NULL CHECK (target_source IN ('natural_earth', 'cshapes')),
+  target_iso3 TEXT,
+  target_name TEXT,
+  target_gwcode INTEGER,
+  valid_from_year INTEGER,
+  valid_to_year INTEGER,
+  note TEXT,
+  CHECK (source_iso3 IS NOT NULL OR source_name IS NOT NULL),
+  CHECK (
+    (target_source = 'natural_earth' AND (target_iso3 IS NOT NULL OR target_name IS NOT NULL) AND target_gwcode IS NULL)
+    OR
+    (target_source = 'cshapes' AND target_gwcode IS NOT NULL AND target_iso3 IS NULL)
+  )
+);
+
+INSERT INTO demscore.country_aliases
+  (dataset, source_iso3, source_name, target_source, target_iso3, target_name, target_gwcode, valid_from_year, valid_to_year, note)
+VALUES
+  -- Current-country naming mismatch: REPDEM has no ISO column and Natural Earth's
+  -- stored long name is "Czech Republic" even though NAME is "Czechia".
+  ('repdem', NULL, 'Czechia', 'natural_earth', 'CZE', NULL, NULL, NULL, NULL, 'REPDEM source name; Natural Earth NAME_LONG is Czech Republic'),
+
+  -- Historical countries present in QoG and covered by CShapes 2.0.
+  ('qog', 'YUG', 'Yugoslavia', 'cshapes', NULL, NULL, 345, NULL, NULL, 'Yugoslavia, Gleditsch-Ward 345'),
+  ('qog', 'CSK', 'Czechoslovakia', 'cshapes', NULL, NULL, 315, NULL, NULL, 'Czechoslovakia, Gleditsch-Ward 315'),
+  ('qog', 'SUN', 'USSR', 'cshapes', NULL, NULL, 365, NULL, 1991, 'Russia/Soviet Union, Gleditsch-Ward 365'),
+  ('qog', 'DDR', 'German Democratic Republic', 'cshapes', NULL, NULL, 265, NULL, NULL, 'German Democratic Republic, Gleditsch-Ward 265'),
+
+  -- Historical countries and territories present in V-Dem and covered by CShapes 2.0.
+  ('v_dem', 'ZZB', 'Zanzibar', 'cshapes', NULL, NULL, 511, NULL, NULL, 'Zanzibar, Gleditsch-Ward 511'),
+  ('v_dem', 'VDR', 'Republic of Vietnam', 'cshapes', NULL, NULL, 817, NULL, NULL, 'Republic of Vietnam, Gleditsch-Ward 817'),
+  ('v_dem', 'YMD', 'South Yemen', 'cshapes', NULL, NULL, 680, NULL, NULL, 'Yemen, People''s Republic of, Gleditsch-Ward 680'),
+  ('v_dem', 'DDR', 'German Democratic Republic', 'cshapes', NULL, NULL, 265, NULL, NULL, 'German Democratic Republic, Gleditsch-Ward 265'),
+  ('v_dem', 'PSE', 'Palestine/West Bank', 'cshapes', NULL, NULL, 6631, NULL, NULL, 'West Bank, Gleditsch-Ward 6631'),
+  ('v_dem', 'PSG', 'Palestine/Gaza', 'cshapes', NULL, NULL, 6511, NULL, NULL, 'Gaza, Gleditsch-Ward 6511'),
+  ('v_dem', 'PSB', 'Palestine/British Mandate', 'cshapes', NULL, NULL, 665, NULL, NULL, 'Palestine, Gleditsch-Ward 665');
+
+CREATE INDEX country_aliases_dataset_idx ON demscore.country_aliases (dataset);
+CREATE INDEX country_aliases_source_iso3_idx ON demscore.country_aliases (upper(source_iso3));
+CREATE INDEX country_aliases_source_name_idx ON demscore.country_aliases (lower(source_name));
+CREATE INDEX country_aliases_target_gwcode_idx ON demscore.country_aliases (target_gwcode);
 
 CREATE TABLE demscore.countries (
   id BIGSERIAL PRIMARY KEY,
@@ -34,6 +86,11 @@ CREATE TABLE demscore.countries (
   iso_a3 TEXT,
   iso_a2 TEXT,
   id_key TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'natural_earth',
+  source_key TEXT,
+  gwcode INTEGER,
+  valid_from_year INTEGER,
+  valid_to_year INTEGER,
   geom_4326 geometry(MultiPolygon, 4326) NOT NULL,
   geom_8857 geometry(MultiPolygon, 8857) NOT NULL
 );
@@ -46,7 +103,8 @@ CREATE TABLE demscore.countries (
 -- us drop the overseas units -- so a sovereign's hexagons never land on a
 -- territory an ocean away -- while every country keeps the name and codes the
 -- indicator data is matched against.
-INSERT INTO demscore.countries (name, iso_a3, iso_a2, id_key, geom_4326, geom_8857)
+INSERT INTO demscore.countries
+  (name, iso_a3, iso_a2, id_key, source, source_key, geom_4326, geom_8857)
 WITH units AS (
   SELECT
     NULLIF(NULLIF(adm0_a3, ''), '-99') AS adm0_a3,
@@ -98,6 +156,8 @@ SELECT
   c.iso_a3,
   c.iso_a2,
   COALESCE(c.iso_a3, lower(c.name)) AS id_key,
+  'natural_earth' AS source,
+  'natural_earth:' || COALESCE(c.iso_a3, lower(c.name)) AS source_key,
   c.geom_4326,
   -- No latitude clip. The old one cut every outline at +/-85.05112878 because
   -- that is where Web Mercator stops being able to represent the world at all;
@@ -118,8 +178,49 @@ WHERE c.name IS NOT NULL
     )
   );
 
+-- Historical countries that appear in the curated alias table. CShapes carries
+-- one row per validity period, so the source year can land on the matching
+-- period instead of forcing dissolved modern borders onto historical data.
+INSERT INTO demscore.countries
+  (name, iso_a3, iso_a2, id_key, source, source_key, gwcode, valid_from_year, valid_to_year, geom_4326, geom_8857)
+SELECT
+  src.cntry_name AS name,
+  NULL::TEXT AS iso_a3,
+  NULL::TEXT AS iso_a2,
+  'cshapes_' || src.gwcode::TEXT || '_' || src.id::TEXT AS id_key,
+  'cshapes' AS source,
+  'cshapes:' || src.gwcode::TEXT || ':' || src.id::TEXT AS source_key,
+  src.gwcode::INTEGER AS gwcode,
+  src.gwsyear::INTEGER AS valid_from_year,
+  src.gweyear::INTEGER AS valid_to_year,
+  ST_Multi(ST_MakeValid(src.geom))::geometry(MultiPolygon, 4326) AS geom_4326,
+  ST_Multi(
+    ST_CollectionExtract(
+      ST_MakeValid(ST_Transform(ST_MakeValid(src.geom), 8857)),
+      3
+    )
+  )::geometry(MultiPolygon, 8857) AS geom_8857
+FROM demscore.cshapes_src src
+JOIN (
+  SELECT DISTINCT target_gwcode
+  FROM demscore.country_aliases
+  WHERE target_source = 'cshapes'
+) a ON a.target_gwcode = src.gwcode
+WHERE src.geom IS NOT NULL
+  AND src.gwcode IS NOT NULL
+  AND src.cntry_name IS NOT NULL
+  AND NOT ST_IsEmpty(
+    ST_CollectionExtract(
+      ST_MakeValid(ST_Transform(ST_MakeValid(src.geom), 8857)),
+      3
+    )
+  );
+
 CREATE INDEX countries_iso_a3_idx ON demscore.countries (iso_a3);
 CREATE INDEX countries_name_lc_idx ON demscore.countries (lower(name));
+CREATE INDEX countries_source_idx ON demscore.countries (source);
+CREATE INDEX countries_source_key_idx ON demscore.countries (source_key);
+CREATE INDEX countries_gwcode_year_idx ON demscore.countries (gwcode, valid_from_year, valid_to_year);
 CREATE INDEX countries_geom_4326_gix ON demscore.countries USING GIST (geom_4326);
 CREATE INDEX countries_geom_8857_gix ON demscore.countries USING GIST (geom_8857);
 
@@ -130,6 +231,7 @@ UPDATE demscore.dataset_values dv
 SET country_id = c.id
 FROM demscore.countries c
 WHERE dv.iso3 IS NOT NULL
+  AND c.source = 'natural_earth'
   AND upper(c.iso_a3) = upper(dv.iso3);
 
 UPDATE demscore.dataset_values dv
@@ -137,12 +239,127 @@ SET country_id = c.id
 FROM demscore.countries c
 WHERE dv.country_id IS NULL
   AND dv.country_name IS NOT NULL
+  AND c.source = 'natural_earth'
   AND lower(c.name) = lower(dv.country_name);
 
-DELETE FROM demscore.dataset_values
-WHERE country_id IS NULL;
+WITH matches AS (
+  SELECT DISTINCT ON (dv.id)
+    dv.id AS dataset_value_id,
+    c.id AS country_id
+  FROM demscore.dataset_values dv
+  JOIN demscore.variables v ON v.id = dv.variable_id
+  JOIN demscore.country_aliases a
+    ON a.dataset = v.dataset
+   AND a.target_source = 'natural_earth'
+   AND (a.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(a.source_iso3) = upper(dv.iso3)))
+   AND (a.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(a.source_name) = lower(dv.country_name)))
+  JOIN demscore.countries c
+    ON c.source = 'natural_earth'
+   AND (
+     (a.target_iso3 IS NOT NULL AND c.iso_a3 IS NOT NULL AND upper(c.iso_a3) = upper(a.target_iso3))
+     OR
+     (a.target_name IS NOT NULL AND lower(c.name) = lower(a.target_name))
+   )
+  WHERE dv.country_id IS NULL
+  ORDER BY dv.id, c.id
+)
+UPDATE demscore.dataset_values dv
+SET country_id = m.country_id
+FROM matches m
+WHERE dv.id = m.dataset_value_id;
+
+WITH matches AS (
+  SELECT DISTINCT ON (dv.id)
+    dv.id AS dataset_value_id,
+    c.id AS country_id
+  FROM demscore.dataset_values dv
+  JOIN demscore.variables v ON v.id = dv.variable_id
+  JOIN demscore.country_aliases a
+    ON a.dataset = v.dataset
+   AND a.target_source = 'cshapes'
+   AND (a.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(a.source_iso3) = upper(dv.iso3)))
+   AND (a.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(a.source_name) = lower(dv.country_name)))
+   AND (a.valid_from_year IS NULL OR dv.year >= a.valid_from_year)
+   AND (a.valid_to_year IS NULL OR dv.year <= a.valid_to_year)
+  JOIN demscore.countries c
+    ON c.source = 'cshapes'
+   AND c.gwcode = a.target_gwcode
+   AND (c.valid_from_year IS NULL OR dv.year >= c.valid_from_year)
+   AND (c.valid_to_year IS NULL OR dv.year <= c.valid_to_year)
+  WHERE dv.country_id IS NULL
+  -- Some CShapes transitions have more than one feature touching the same year.
+  -- Country-year data gets the latest-starting period for that year.
+  ORDER BY dv.id, c.valid_from_year DESC NULLS LAST, c.valid_to_year ASC NULLS LAST, c.id
+)
+UPDATE demscore.dataset_values dv
+SET country_id = m.country_id
+FROM matches m
+WHERE dv.id = m.dataset_value_id;
+
+-- Both matching passes above have now run against every dataset_values row,
+-- so a CShapes period nothing points to can never be reached: country_scores()
+-- and hex_variable() only ever look up a country's hexagons by a country_id
+-- that came out of dataset_values, and getMapData's LEFT JOIN keeps a
+-- historical row only when scores found one (web-backend/server.js). CShapes
+-- carries one row per border-change period rather than one per alias, so a
+-- long-lived state arrives as several near-duplicate, full-sized periods --
+-- the Soviet Union (gwcode 365) as 24 of them, of which only one is ever
+-- matched. Building a full hex mesh and border set at every hex_size for the
+-- other 23 would be real work spent on rows no request can ever select, so
+-- they are dropped here, before that work runs, rather than kept unused.
+DELETE FROM demscore.countries c
+WHERE c.source = 'cshapes'
+  AND NOT EXISTS (
+    SELECT 1 FROM demscore.dataset_values dv WHERE dv.country_id = c.id
+  );
+
+ANALYZE demscore.countries;
+
+CREATE TABLE demscore.dataset_value_unmapped_audit (
+  dataset TEXT NOT NULL,
+  variable TEXT NOT NULL,
+  year INTEGER NOT NULL,
+  iso3 TEXT,
+  country_name TEXT,
+  value_count BIGINT NOT NULL,
+  min_value DOUBLE PRECISION,
+  max_value DOUBLE PRECISION,
+  reason TEXT NOT NULL
+);
+
+INSERT INTO demscore.dataset_value_unmapped_audit
+  (dataset, variable, year, iso3, country_name, value_count, min_value, max_value, reason)
+SELECT
+  v.dataset,
+  v.variable,
+  dv.year,
+  dv.iso3,
+  dv.country_name,
+  count(*) AS value_count,
+  min(dv.value) AS min_value,
+  max(dv.value) AS max_value,
+  CASE
+    WHEN EXISTS (
+      SELECT 1
+      FROM demscore.country_aliases a
+      WHERE a.dataset = v.dataset
+        AND (a.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(a.source_iso3) = upper(dv.iso3)))
+        AND (a.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(a.source_name) = lower(dv.country_name)))
+    ) THEN 'alias_outside_supported_year_or_geometry'
+    ELSE 'no_country_match'
+  END AS reason
+FROM demscore.dataset_values dv
+JOIN demscore.variables v ON v.id = dv.variable_id
+WHERE dv.country_id IS NULL
+GROUP BY v.dataset, v.variable, dv.year, dv.iso3, dv.country_name;
+
+CREATE INDEX dataset_value_unmapped_audit_dataset_idx
+  ON demscore.dataset_value_unmapped_audit (dataset);
+CREATE INDEX dataset_value_unmapped_audit_country_idx
+  ON demscore.dataset_value_unmapped_audit (dataset, iso3, country_name);
 
 ANALYZE demscore.dataset_values;
+ANALYZE demscore.dataset_value_unmapped_audit;
 
 CREATE TABLE demscore.hex_mesh (
   country_id BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
@@ -688,14 +905,33 @@ WITH normalized AS (
    AND dv.year = n.year
   WHERE dv.country_id IS NOT NULL
   GROUP BY dv.country_id
+), distinct_values AS (
+  SELECT DISTINCT value
+  FROM country_values
+), class_plan AS (
+  SELECT LEAST(7, count(*)::INTEGER) AS class_count
+  FROM distinct_values
+), ranked_values AS (
+  SELECT
+    value,
+    dense_rank() OVER (ORDER BY value)::INTEGER AS value_rank
+  FROM distinct_values
 ), ranked_countries AS (
   SELECT
     cv.country_id,
     cv.value,
-    ntile(7) OVER (ORDER BY cv.value) AS class_idx,
+    CASE
+      WHEN cp.class_count = 0 THEN NULL
+      ELSE FLOOR(
+        (rv.value_rank - 1)::NUMERIC * cp.class_count
+        / (SELECT count(*)::NUMERIC FROM distinct_values)
+      )::INTEGER + 1
+    END AS class_idx,
     min(cv.value) OVER () AS min_value,
     max(cv.value) OVER () AS max_value
   FROM country_values cv
+  JOIN ranked_values rv ON rv.value = cv.value
+  CROSS JOIN class_plan cp
 )
 SELECT
   rc.country_id,

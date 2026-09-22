@@ -5,12 +5,15 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 # Country identity (names, ISO codes) and the web-backend land basemap.
-COUNTRIES_FILE="${ROOT_DIR}/data/reference/ne_110m_admin_0_countries.geojson"
-COUNTRIES_URL="https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
+COUNTRIES_FILE="${ROOT_DIR}/data/reference/ne_50m_admin_0_countries.geojson"
+COUNTRIES_URL="https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson"
 # The same sovereigns split into geographic units, so sql/mapserver_hex_setup.sql
 # can drop overseas territories such as French Guiana from the hex geometry.
-MAP_UNITS_FILE="${ROOT_DIR}/data/reference/ne_110m_admin_0_map_units.geojson"
-MAP_UNITS_URL="https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_map_units.geojson"
+MAP_UNITS_FILE="${ROOT_DIR}/data/reference/ne_50m_admin_0_map_units.geojson"
+MAP_UNITS_URL="https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_map_units.geojson"
+# Historical country and dependent-territory boundaries for source observations
+# whose country-year unit no longer exists in Natural Earth's current-country set.
+CSHAPES_FILE="${ROOT_DIR}/data/reference/CShapes-2.0.geojson"
 PG_HOST="${PG_HOST:-127.0.0.1}"
 PG_PORT="${PG_PORT:-5532}"
 PG_DB="${PG_DB:-demscore}"
@@ -25,6 +28,11 @@ for spec in "$COUNTRIES_FILE|$COUNTRIES_URL" "$MAP_UNITS_FILE|$MAP_UNITS_URL"; d
     curl -L --fail --show-error --output "$ref_file" "$ref_url"
   fi
 done
+
+if [[ ! -f "$CSHAPES_FILE" ]]; then
+  echo "Missing required historical geometry file: ${CSHAPES_FILE}" >&2
+  exit 1
+fi
 
 echo "Starting services for local dev..."
 "${ROOT_DIR}/scripts/dev_up.sh"
@@ -46,7 +54,7 @@ echo "Importing country boundaries into PostGIS..."
 podman compose --profile setup run --rm gdal ogr2ogr \
   -f PostgreSQL \
   "PG:host=db port=5432 dbname=${PG_DB} user=${PG_USER}" \
-  /data/ne_110m_admin_0_countries.geojson \
+  /data/ne_50m_admin_0_countries.geojson \
   -nln demscore.countries_src \
   -overwrite \
   -nlt PROMOTE_TO_MULTI \
@@ -57,8 +65,19 @@ echo "Importing country map units into PostGIS..."
 podman compose --profile setup run --rm gdal ogr2ogr \
   -f PostgreSQL \
   "PG:host=db port=5432 dbname=${PG_DB} user=${PG_USER}" \
-  /data/ne_110m_admin_0_map_units.geojson \
+  /data/ne_50m_admin_0_map_units.geojson \
   -nln demscore.country_units_src \
+  -overwrite \
+  -nlt PROMOTE_TO_MULTI \
+  -lco GEOMETRY_NAME=geom \
+  -lco FID=id
+
+echo "Importing historical country boundaries into PostGIS..."
+podman compose --profile setup run --rm gdal ogr2ogr \
+  -f PostgreSQL \
+  "PG:host=db port=5432 dbname=${PG_DB} user=${PG_USER}" \
+  /data/CShapes-2.0.geojson \
+  -nln demscore.cshapes_src \
   -overwrite \
   -nlt PROMOTE_TO_MULTI \
   -lco GEOMETRY_NAME=geom \
