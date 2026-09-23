@@ -20,6 +20,9 @@ usage() {
   echo "  stop      Stop all services"
   echo "  status    Show service status"
   echo "  preload N Preload mapcache zoom levels 1..N"
+  echo "            Pass --clear to empty the tile cache before warming it"
+  echo "  clear-map-tile-cache"
+  echo "            Empty the server-side WMS tile cache and reload nginx"
   echo ""
   echo "Shortcuts:"
   echo "  --preload N  Same as: preload N"
@@ -93,10 +96,13 @@ cmd_install() {
   echo "Setting up MapServer and hex service..."
   ./scripts/setup_mapserver_hex_service.sh
 
+  router_port="$(grep '^DEMSCORE_ROUTER_PORT=' "$ENV_FILE" | cut -d'=' -f2- || true)"
+  router_port="${router_port:-8090}"
+
   echo ""
   echo "Install complete."
-  echo "  Web app:   http://127.0.0.1:8090"
-  echo "  MapServer: http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map"
+  echo "  Web app:   http://127.0.0.1:${router_port}"
+  echo "  MapServer: http://127.0.0.1:${router_port}/mapserver?map=/etc/mapserver/mapserver.map"
 }
 
 cmd_start() {
@@ -130,6 +136,11 @@ cmd_preload() {
   ./scripts/preload_mapcache_tiles.sh --zoom-min 1 --zoom-max "$levels" "$@"
 }
 
+cmd_clear_map_tile_cache() {
+  check_deps
+  ./scripts/clear_map_tile_cache.sh "$@"
+}
+
 # ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
@@ -141,5 +152,6 @@ case "${1:-}" in
   status)  cmd_status ;;
   preload) shift; cmd_preload "$@" ;;
   --preload) shift; cmd_preload "$@" ;;
+  clear-map-tile-cache) shift; cmd_clear_map_tile_cache "$@" ;;
   *)       usage ;;
 esac

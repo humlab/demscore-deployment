@@ -16,6 +16,12 @@ BEGIN
   IF to_regclass('demscore.cshapes_src') IS NULL THEN
     RAISE EXCEPTION 'Missing table demscore.cshapes_src. Run scripts/setup_mapserver_hex_service.sh to import CShapes historical boundaries.';
   END IF;
+  IF to_regclass('demscore.historical_country_geometries_src') IS NULL THEN
+    RAISE EXCEPTION 'Missing table demscore.historical_country_geometries_src. Run sql/historical_geometry.sql first (scripts/setup_mapserver_hex_service.sh does).';
+  END IF;
+  IF to_regclass('demscore.country_resolution_policy') IS NULL THEN
+    RAISE EXCEPTION 'Missing table demscore.country_resolution_policy. Run sql/historical_geometry.sql first (scripts/setup_mapserver_hex_service.sh does).';
+  END IF;
 END;
 $$;
 
@@ -25,60 +31,25 @@ $$;
 -- refused. sql/mapserver_hex_mercator.sql rebuilds them immediately after --
 -- scripts/setup_mapserver_hex_service.sh runs the two in that order -- so run
 -- that file too if you run this one on its own.
+DROP TABLE IF EXISTS demscore.hex_border_sides_mercator;
+DROP TABLE IF EXISTS demscore.hex_border_edges_mercator;
 DROP TABLE IF EXISTS demscore.hex_borders_mercator;
 DROP TABLE IF EXISTS demscore.hex_mesh_mercator;
+DROP TABLE IF EXISTS demscore.hex_border_sides;
+DROP TABLE IF EXISTS demscore.hex_border_edges;
+-- The single-row-per-country-pair table these two replace. Still dropped so a
+-- redeploy over a database built before the split leaves nothing behind.
 DROP TABLE IF EXISTS demscore.hex_borders;
 DROP TABLE IF EXISTS demscore.hex_mesh;
 DROP TABLE IF EXISTS demscore.countries;
 DROP TABLE IF EXISTS demscore.dataset_value_unmapped_audit;
-DROP TABLE IF EXISTS demscore.country_aliases;
 
-CREATE TABLE demscore.country_aliases (
-  id BIGSERIAL PRIMARY KEY,
-  dataset TEXT NOT NULL,
-  source_iso3 TEXT,
-  source_name TEXT,
-  target_source TEXT NOT NULL CHECK (target_source IN ('natural_earth', 'cshapes')),
-  target_iso3 TEXT,
-  target_name TEXT,
-  target_gwcode INTEGER,
-  valid_from_year INTEGER,
-  valid_to_year INTEGER,
-  note TEXT,
-  CHECK (source_iso3 IS NOT NULL OR source_name IS NOT NULL),
-  CHECK (
-    (target_source = 'natural_earth' AND (target_iso3 IS NOT NULL OR target_name IS NOT NULL) AND target_gwcode IS NULL)
-    OR
-    (target_source = 'cshapes' AND target_gwcode IS NOT NULL AND target_iso3 IS NULL)
-  )
-);
-
-INSERT INTO demscore.country_aliases
-  (dataset, source_iso3, source_name, target_source, target_iso3, target_name, target_gwcode, valid_from_year, valid_to_year, note)
-VALUES
-  -- Current-country naming mismatch: REPDEM has no ISO column and Natural Earth's
-  -- stored long name is "Czech Republic" even though NAME is "Czechia".
-  ('repdem', NULL, 'Czechia', 'natural_earth', 'CZE', NULL, NULL, NULL, NULL, 'REPDEM source name; Natural Earth NAME_LONG is Czech Republic'),
-
-  -- Historical countries present in QoG and covered by CShapes 2.0.
-  ('qog', 'YUG', 'Yugoslavia', 'cshapes', NULL, NULL, 345, NULL, NULL, 'Yugoslavia, Gleditsch-Ward 345'),
-  ('qog', 'CSK', 'Czechoslovakia', 'cshapes', NULL, NULL, 315, NULL, NULL, 'Czechoslovakia, Gleditsch-Ward 315'),
-  ('qog', 'SUN', 'USSR', 'cshapes', NULL, NULL, 365, NULL, 1991, 'Russia/Soviet Union, Gleditsch-Ward 365'),
-  ('qog', 'DDR', 'German Democratic Republic', 'cshapes', NULL, NULL, 265, NULL, NULL, 'German Democratic Republic, Gleditsch-Ward 265'),
-
-  -- Historical countries and territories present in V-Dem and covered by CShapes 2.0.
-  ('v_dem', 'ZZB', 'Zanzibar', 'cshapes', NULL, NULL, 511, NULL, NULL, 'Zanzibar, Gleditsch-Ward 511'),
-  ('v_dem', 'VDR', 'Republic of Vietnam', 'cshapes', NULL, NULL, 817, NULL, NULL, 'Republic of Vietnam, Gleditsch-Ward 817'),
-  ('v_dem', 'YMD', 'South Yemen', 'cshapes', NULL, NULL, 680, NULL, NULL, 'Yemen, People''s Republic of, Gleditsch-Ward 680'),
-  ('v_dem', 'DDR', 'German Democratic Republic', 'cshapes', NULL, NULL, 265, NULL, NULL, 'German Democratic Republic, Gleditsch-Ward 265'),
-  ('v_dem', 'PSE', 'Palestine/West Bank', 'cshapes', NULL, NULL, 6631, NULL, NULL, 'West Bank, Gleditsch-Ward 6631'),
-  ('v_dem', 'PSG', 'Palestine/Gaza', 'cshapes', NULL, NULL, 6511, NULL, NULL, 'Gaza, Gleditsch-Ward 6511'),
-  ('v_dem', 'PSB', 'Palestine/British Mandate', 'cshapes', NULL, NULL, 665, NULL, NULL, 'Palestine, Gleditsch-Ward 665');
-
-CREATE INDEX country_aliases_dataset_idx ON demscore.country_aliases (dataset);
-CREATE INDEX country_aliases_source_iso3_idx ON demscore.country_aliases (upper(source_iso3));
-CREATE INDEX country_aliases_source_name_idx ON demscore.country_aliases (lower(source_name));
-CREATE INDEX country_aliases_target_gwcode_idx ON demscore.country_aliases (target_gwcode);
+-- demscore.country_aliases and its replacement, demscore.country_resolution_policy,
+-- are built by sql/historical_geometry.sql, which runs before this file. The
+-- policy table is read here rather than written: which historical geometry a
+-- source entity is allowed to become is a curation decision, and keeping it in
+-- one file next to the geometry it points at is what lets
+-- scripts/check_country_resolution.sh check the two against each other.
 
 CREATE TABLE demscore.countries (
   id BIGSERIAL PRIMARY KEY,
@@ -89,8 +60,20 @@ CREATE TABLE demscore.countries (
   source TEXT NOT NULL DEFAULT 'natural_earth',
   source_key TEXT,
   gwcode INTEGER,
+  registry_key TEXT,
   valid_from_year INTEGER,
   valid_to_year INTEGER,
+  -- Where this country's outline came from, and how far it is to be trusted.
+  -- A Natural Earth country and a grand duchy traced off an 1815 snapshot both
+  -- end up as a row here with hexagons on it, and nothing else downstream can
+  -- tell them apart -- the WMS image least of all. These three columns are what
+  -- /api/map-data and /api/source-coverage read so the table beside the map can
+  -- say which is which. demscore.historical_country_geometries_src holds the
+  -- full provenance; this is the part every consumer needs.
+  geometry_source_dataset TEXT NOT NULL DEFAULT 'natural_earth_50m',
+  geometry_source_license TEXT NOT NULL DEFAULT 'Public domain',
+  geometry_confidence TEXT NOT NULL DEFAULT 'high'
+    CHECK (geometry_confidence IN ('high', 'medium', 'low')),
   geom_4326 geometry(MultiPolygon, 4326) NOT NULL,
   geom_8857 geometry(MultiPolygon, 8857) NOT NULL
 );
@@ -178,11 +161,13 @@ WHERE c.name IS NOT NULL
     )
   );
 
--- Historical countries that appear in the curated alias table. CShapes carries
--- one row per validity period, so the source year can land on the matching
--- period instead of forcing dissolved modern borders onto historical data.
+-- Historical countries the resolution policy sends to CShapes 2.0. CShapes
+-- carries one row per validity period, so the source year can land on the
+-- matching period instead of forcing dissolved modern borders onto historical
+-- data.
 INSERT INTO demscore.countries
-  (name, iso_a3, iso_a2, id_key, source, source_key, gwcode, valid_from_year, valid_to_year, geom_4326, geom_8857)
+  (name, iso_a3, iso_a2, id_key, source, source_key, gwcode, valid_from_year, valid_to_year,
+   geometry_source_dataset, geometry_source_license, geometry_confidence, geom_4326, geom_8857)
 SELECT
   src.cntry_name AS name,
   NULL::TEXT AS iso_a3,
@@ -193,6 +178,12 @@ SELECT
   src.gwcode::INTEGER AS gwcode,
   src.gwsyear::INTEGER AS valid_from_year,
   src.gweyear::INTEGER AS valid_to_year,
+  'cshapes_2.0' AS geometry_source_dataset,
+  'CC BY-NC-SA 4.0' AS geometry_source_license,
+  -- CShapes is period-aware, and the matching pass below only ever lands a year
+  -- inside a period's own span, so every row it supplies is a boundary that
+  -- source says was in force that year.
+  'high' AS geometry_confidence,
   ST_Multi(ST_MakeValid(src.geom))::geometry(MultiPolygon, 4326) AS geom_4326,
   ST_Multi(
     ST_CollectionExtract(
@@ -203,8 +194,8 @@ SELECT
 FROM demscore.cshapes_src src
 JOIN (
   SELECT DISTINCT target_gwcode
-  FROM demscore.country_aliases
-  WHERE target_source = 'cshapes'
+  FROM demscore.country_resolution_policy
+  WHERE status = 'cshapes'
 ) a ON a.target_gwcode = src.gwcode
 WHERE src.geom IS NOT NULL
   AND src.gwcode IS NOT NULL
@@ -216,49 +207,83 @@ WHERE src.geom IS NOT NULL
     )
   );
 
+-- The curated historical registry: every polygon sql/historical_geometry.sql
+-- assembled, whatever upstream source it came from. These arrive as countries
+-- of their own rather than as aliases onto a present-day row, because a source
+-- coding unit folded onto a modern country would be averaged together with it
+-- by demscore.country_scores() -- V-Dem codes both a pre-partition Vietnam and
+-- a northern one for the years 1945 to 1953, and one row could not hold both.
+INSERT INTO demscore.countries
+  (name, iso_a3, iso_a2, id_key, source, source_key, registry_key, valid_from_year, valid_to_year,
+   geometry_source_dataset, geometry_source_license, geometry_confidence, geom_4326, geom_8857)
+SELECT
+  r.normalized_name AS name,
+  NULL::TEXT AS iso_a3,
+  NULL::TEXT AS iso_a2,
+  'histgeom_' || r.registry_key || '_' || r.valid_from_year::TEXT AS id_key,
+  'historical_registry' AS source,
+  'historical_registry:' || r.registry_key || ':' || r.valid_from_year::TEXT AS source_key,
+  r.registry_key,
+  r.valid_from_year,
+  r.valid_to_year,
+  r.source_dataset,
+  r.source_license,
+  r.confidence,
+  ST_Multi(ST_MakeValid(r.geom))::geometry(MultiPolygon, 4326) AS geom_4326,
+  ST_Multi(
+    ST_CollectionExtract(
+      ST_MakeValid(ST_Transform(ST_MakeValid(r.geom), 8857)),
+      3
+    )
+  )::geometry(MultiPolygon, 8857) AS geom_8857
+FROM demscore.historical_country_geometries_src r
+WHERE NOT ST_IsEmpty(
+  ST_CollectionExtract(
+    ST_MakeValid(ST_Transform(ST_MakeValid(r.geom), 8857)),
+    3
+  )
+);
+
 CREATE INDEX countries_iso_a3_idx ON demscore.countries (iso_a3);
 CREATE INDEX countries_name_lc_idx ON demscore.countries (lower(name));
 CREATE INDEX countries_source_idx ON demscore.countries (source);
 CREATE INDEX countries_source_key_idx ON demscore.countries (source_key);
 CREATE INDEX countries_gwcode_year_idx ON demscore.countries (gwcode, valid_from_year, valid_to_year);
+CREATE INDEX countries_registry_key_year_idx ON demscore.countries (registry_key, valid_from_year, valid_to_year);
 CREATE INDEX countries_geom_4326_gix ON demscore.countries USING GIST (geom_4326);
 CREATE INDEX countries_geom_8857_gix ON demscore.countries USING GIST (geom_8857);
 
 UPDATE demscore.dataset_values
 SET country_id = NULL;
 
-UPDATE demscore.dataset_values dv
-SET country_id = c.id
-FROM demscore.countries c
-WHERE dv.iso3 IS NOT NULL
-  AND c.source = 'natural_earth'
-  AND upper(c.iso_a3) = upper(dv.iso3);
+-- Matching runs policy first, then the two direct matches.
+--
+-- The order is the point. demscore.country_resolution_policy is a decision
+-- somebody wrote down; an ISO3 that happens to equal a Natural Earth code is an
+-- accident of two code lists agreeing. When they disagree the written decision
+-- has to win, or a policy row narrowing an entity to part of its span would be
+-- quietly overtaken by a direct match on the rest.
 
-UPDATE demscore.dataset_values dv
-SET country_id = c.id
-FROM demscore.countries c
-WHERE dv.country_id IS NULL
-  AND dv.country_name IS NOT NULL
-  AND c.source = 'natural_earth'
-  AND lower(c.name) = lower(dv.country_name);
-
+-- Pass 1: policy rows pointing at a present-day Natural Earth country.
 WITH matches AS (
   SELECT DISTINCT ON (dv.id)
     dv.id AS dataset_value_id,
     c.id AS country_id
   FROM demscore.dataset_values dv
   JOIN demscore.variables v ON v.id = dv.variable_id
-  JOIN demscore.country_aliases a
-    ON a.dataset = v.dataset
-   AND a.target_source = 'natural_earth'
-   AND (a.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(a.source_iso3) = upper(dv.iso3)))
-   AND (a.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(a.source_name) = lower(dv.country_name)))
+  JOIN demscore.country_resolution_policy p
+    ON p.dataset = v.dataset
+   AND p.status = 'natural_earth'
+   AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
+   AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
+   AND (p.from_year IS NULL OR dv.year >= p.from_year)
+   AND (p.to_year IS NULL OR dv.year <= p.to_year)
   JOIN demscore.countries c
     ON c.source = 'natural_earth'
    AND (
-     (a.target_iso3 IS NOT NULL AND c.iso_a3 IS NOT NULL AND upper(c.iso_a3) = upper(a.target_iso3))
+     (p.target_iso3 IS NOT NULL AND c.iso_a3 IS NOT NULL AND upper(c.iso_a3) = upper(p.target_iso3))
      OR
-     (a.target_name IS NOT NULL AND lower(c.name) = lower(a.target_name))
+     (p.target_name IS NOT NULL AND lower(c.name) = lower(p.target_name))
    )
   WHERE dv.country_id IS NULL
   ORDER BY dv.id, c.id
@@ -268,22 +293,23 @@ SET country_id = m.country_id
 FROM matches m
 WHERE dv.id = m.dataset_value_id;
 
+-- Pass 2: policy rows pointing at a CShapes 2.0 historical period.
 WITH matches AS (
   SELECT DISTINCT ON (dv.id)
     dv.id AS dataset_value_id,
     c.id AS country_id
   FROM demscore.dataset_values dv
   JOIN demscore.variables v ON v.id = dv.variable_id
-  JOIN demscore.country_aliases a
-    ON a.dataset = v.dataset
-   AND a.target_source = 'cshapes'
-   AND (a.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(a.source_iso3) = upper(dv.iso3)))
-   AND (a.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(a.source_name) = lower(dv.country_name)))
-   AND (a.valid_from_year IS NULL OR dv.year >= a.valid_from_year)
-   AND (a.valid_to_year IS NULL OR dv.year <= a.valid_to_year)
+  JOIN demscore.country_resolution_policy p
+    ON p.dataset = v.dataset
+   AND p.status = 'cshapes'
+   AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
+   AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
+   AND (p.from_year IS NULL OR dv.year >= p.from_year)
+   AND (p.to_year IS NULL OR dv.year <= p.to_year)
   JOIN demscore.countries c
     ON c.source = 'cshapes'
-   AND c.gwcode = a.target_gwcode
+   AND c.gwcode = p.target_gwcode
    AND (c.valid_from_year IS NULL OR dv.year >= c.valid_from_year)
    AND (c.valid_to_year IS NULL OR dv.year <= c.valid_to_year)
   WHERE dv.country_id IS NULL
@@ -296,25 +322,103 @@ SET country_id = m.country_id
 FROM matches m
 WHERE dv.id = m.dataset_value_id;
 
--- Both matching passes above have now run against every dataset_values row,
--- so a CShapes period nothing points to can never be reached: country_scores()
+-- Pass 3: policy rows pointing at the curated historical registry.
+--
+-- The registry's own validity periods choose the polygon inside the window the
+-- policy row opens, which is what lets one policy row cover Bavaria from 1789
+-- to 1871 across a snapshot, a backward extension, five border-change periods
+-- and a forward extension. An exclusion constraint on the registry makes those
+-- periods non-overlapping, so at most one can match and no tie-break is needed.
+WITH matches AS (
+  SELECT
+    dv.id AS dataset_value_id,
+    c.id AS country_id
+  FROM demscore.dataset_values dv
+  JOIN demscore.variables v ON v.id = dv.variable_id
+  JOIN demscore.country_resolution_policy p
+    ON p.dataset = v.dataset
+   AND p.status = 'historical_registry'
+   AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
+   AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
+   AND (p.from_year IS NULL OR dv.year >= p.from_year)
+   AND (p.to_year IS NULL OR dv.year <= p.to_year)
+  JOIN demscore.countries c
+    ON c.source = 'historical_registry'
+   AND c.registry_key = p.target_registry_key
+   AND dv.year BETWEEN c.valid_from_year AND c.valid_to_year
+  WHERE dv.country_id IS NULL
+)
+UPDATE demscore.dataset_values dv
+SET country_id = m.country_id
+FROM matches m
+WHERE dv.id = m.dataset_value_id;
+
+-- Pass 4: the source's own ISO3 against a present-day country code.
+UPDATE demscore.dataset_values dv
+SET country_id = c.id
+FROM demscore.countries c
+WHERE dv.country_id IS NULL
+  AND dv.iso3 IS NOT NULL
+  AND c.source = 'natural_earth'
+  AND upper(c.iso_a3) = upper(dv.iso3);
+
+-- Pass 5: the source's own country name against a present-day country name.
+UPDATE demscore.dataset_values dv
+SET country_id = c.id
+FROM demscore.countries c
+WHERE dv.country_id IS NULL
+  AND dv.country_name IS NOT NULL
+  AND c.source = 'natural_earth'
+  AND lower(c.name) = lower(dv.country_name);
+
+-- An `intentionally_unsupported` policy row is a refusal, so it has to be able
+-- to overrule a later match as well as the absence of one. Nothing in the
+-- current policy set reaches this -- South Yemen before 1967 has no ISO3 or
+-- name Natural Earth answers to -- but a refusal that only worked while no
+-- other pass happened to match would be a decision the next source revision
+-- could undo without anybody noticing.
+UPDATE demscore.dataset_values dv
+SET country_id = NULL
+FROM demscore.variables v, demscore.country_resolution_policy p
+WHERE v.id = dv.variable_id
+  AND dv.country_id IS NOT NULL
+  AND p.dataset = v.dataset
+  AND p.status = 'intentionally_unsupported'
+  AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
+  AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
+  AND (p.from_year IS NULL OR dv.year >= p.from_year)
+  AND (p.to_year IS NULL OR dv.year <= p.to_year);
+
+-- Every matching pass has now run against every dataset_values row, so a
+-- historical period nothing points to can never be reached: country_scores()
 -- and hex_variable() only ever look up a country's hexagons by a country_id
 -- that came out of dataset_values, and getMapData's LEFT JOIN keeps a
 -- historical row only when scores found one (web-backend/server.js). CShapes
--- carries one row per border-change period rather than one per alias, so a
+-- carries one row per border-change period rather than one per policy row, so a
 -- long-lived state arrives as several near-duplicate, full-sized periods --
 -- the Soviet Union (gwcode 365) as 24 of them, of which only one is ever
 -- matched. Building a full hex mesh and border set at every hex_size for the
 -- other 23 would be real work spent on rows no request can ever select, so
--- they are dropped here, before that work runs, rather than kept unused.
+-- they are dropped here, before that work runs, rather than kept unused. The
+-- registry is curated period by period and should lose nothing here; if it
+-- does, scripts/check_country_resolution.sh says which key and why.
 DELETE FROM demscore.countries c
-WHERE c.source = 'cshapes'
+WHERE c.source IN ('cshapes', 'historical_registry')
   AND NOT EXISTS (
     SELECT 1 FROM demscore.dataset_values dv WHERE dv.country_id = c.id
   );
 
 ANALYZE demscore.countries;
 
+-- What the map could not represent, and whether that was a decision.
+--
+-- Every row here is a source observation that exists and carries a value but
+-- has no geometry to be drawn on. `resolution_status` is the part that matters:
+-- `intentionally_unsupported` means demscore.country_resolution_policy names
+-- this entity and this year window and gives a reason, and `unresolved` means
+-- nothing does. scripts/check_country_resolution.sh fails the setup on the
+-- second kind, so an entity can leave the map only by somebody deciding it
+-- should.
 CREATE TABLE demscore.dataset_value_unmapped_audit (
   dataset TEXT NOT NULL,
   variable TEXT NOT NULL,
@@ -324,11 +428,17 @@ CREATE TABLE demscore.dataset_value_unmapped_audit (
   value_count BIGINT NOT NULL,
   min_value DOUBLE PRECISION,
   max_value DOUBLE PRECISION,
+  resolution_status TEXT NOT NULL
+    CHECK (resolution_status IN ('intentionally_unsupported', 'unresolved')),
+  -- For an intentionally unsupported row, the policy's own reason. For an
+  -- unresolved one, how far the match got, which is the first thing anybody
+  -- adding a policy row needs to know.
   reason TEXT NOT NULL
 );
 
 INSERT INTO demscore.dataset_value_unmapped_audit
-  (dataset, variable, year, iso3, country_name, value_count, min_value, max_value, reason)
+  (dataset, variable, year, iso3, country_name, value_count, min_value, max_value,
+   resolution_status, reason)
 SELECT
   v.dataset,
   v.variable,
@@ -338,25 +448,50 @@ SELECT
   count(*) AS value_count,
   min(dv.value) AS min_value,
   max(dv.value) AS max_value,
-  CASE
-    WHEN EXISTS (
-      SELECT 1
-      FROM demscore.country_aliases a
-      WHERE a.dataset = v.dataset
-        AND (a.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(a.source_iso3) = upper(dv.iso3)))
-        AND (a.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(a.source_name) = lower(dv.country_name)))
-    ) THEN 'alias_outside_supported_year_or_geometry'
-    ELSE 'no_country_match'
-  END AS reason
+  CASE WHEN unsupported.reason IS NOT NULL
+    THEN 'intentionally_unsupported'
+    ELSE 'unresolved'
+  END AS resolution_status,
+  COALESCE(
+    unsupported.reason,
+    CASE
+      WHEN matched_policy.exists_any
+        THEN 'policy_covers_entity_but_not_this_year'
+      ELSE 'no_policy_for_this_entity'
+    END
+  ) AS reason
 FROM demscore.dataset_values dv
 JOIN demscore.variables v ON v.id = dv.variable_id
+LEFT JOIN LATERAL (
+  SELECT p.reason
+  FROM demscore.country_resolution_policy p
+  WHERE p.dataset = v.dataset
+    AND p.status = 'intentionally_unsupported'
+    AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
+    AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
+    AND (p.from_year IS NULL OR dv.year >= p.from_year)
+    AND (p.to_year IS NULL OR dv.year <= p.to_year)
+  ORDER BY p.id
+  LIMIT 1
+) unsupported ON TRUE
+LEFT JOIN LATERAL (
+  SELECT TRUE AS exists_any
+  FROM demscore.country_resolution_policy p
+  WHERE p.dataset = v.dataset
+    AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
+    AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
+  LIMIT 1
+) matched_policy ON TRUE
 WHERE dv.country_id IS NULL
-GROUP BY v.dataset, v.variable, dv.year, dv.iso3, dv.country_name;
+GROUP BY v.dataset, v.variable, dv.year, dv.iso3, dv.country_name,
+         unsupported.reason, matched_policy.exists_any;
 
 CREATE INDEX dataset_value_unmapped_audit_dataset_idx
   ON demscore.dataset_value_unmapped_audit (dataset);
 CREATE INDEX dataset_value_unmapped_audit_country_idx
   ON demscore.dataset_value_unmapped_audit (dataset, iso3, country_name);
+CREATE INDEX dataset_value_unmapped_audit_status_idx
+  ON demscore.dataset_value_unmapped_audit (resolution_status);
 
 ANALYZE demscore.dataset_values;
 ANALYZE demscore.dataset_value_unmapped_audit;
@@ -464,6 +599,20 @@ FROM ranked_hexes;
 -- cells that are a quarter country or better, so the extra hexagon is real land
 -- and not a clipped corner. Denmark comes out with two cells at 100k, which is
 -- what 42 777 km2 buys against a 25 980 km2 cell.
+-- A historical country borrows a cell; it never takes one.
+--
+-- The dealing below moves cells between countries, which is right while the
+-- mesh is a partition of the grid among the countries on the map at once. The
+-- historical rows are not part of that partition: they are an overlay, drawn
+-- for the years they were in force and invisible otherwise. Letting one of them
+-- take a cell removes it from a present-day country in *every* year -- Germany
+-- fell from 11 cells to 6 at 100 km once the pre-unification states arrived,
+-- and Ukraine had already lost four to the Soviet Union. So the claim logic is
+-- unchanged and only the eviction is conditional: when either side of a
+-- transfer is historical, the claimant gets the cell and the owner keeps it
+-- too. Two countries then hold the same geometry, which the border tables
+-- already allow for and which is what the Soviet mesh lying over Russia has
+-- always been.
 CREATE TEMP TABLE hex_fallback ON COMMIT DROP AS
 WITH sizes AS (
   SELECT generate_series(20000, 300000, 5000)::INT AS hex_size_m
@@ -490,6 +639,10 @@ WITH sizes AS (
     (
       SELECT c2.id FROM demscore.countries c2
       WHERE ST_Within(ST_PointOnSurface(g.geom), c2.geom_8857)
+      -- A historical polygon can contain this centre too, and the owner has to
+      -- be the country that holds the cell in the partition, not whichever row
+      -- the planner reached first.
+      ORDER BY (c2.source = 'natural_earth') DESC, c2.id
       LIMIT 1
     ) AS owner_id,
     -- The most any other country holds of this cell, owner or not.
@@ -556,15 +709,22 @@ FROM (
 WHERE w.owner_id IS NULL
    OR w.take_rank <= w.owner_cells - 1;
 
--- A cell has one owner, so the country that had it gives it up. Matching by
--- geometry is exact because both sides are cells of the same global
--- ST_HexagonGrid -- the same reason the border table below groups segments
--- by geometry.
+-- The country that had it gives it up -- unless either side is historical, in
+-- which case the claimant only borrows it and the owner keeps it too (see the
+-- note above this pass). Matching by geometry is exact because both sides are
+-- cells of the same global ST_HexagonGrid -- the same reason the border table
+-- below groups segments by geometry.
 DELETE FROM demscore.hex_mesh hm
 USING hex_fallback f
 WHERE hm.country_id = f.owner_id
   AND hm.hex_size_m = f.hex_size_m
-  AND hm.geom = f.hex_geom;
+  AND hm.geom = f.hex_geom
+  AND EXISTS (
+    SELECT 1 FROM demscore.countries owner, demscore.countries claimant
+    WHERE owner.id = f.owner_id AND claimant.id = f.country_id
+      AND owner.source = 'natural_earth'
+      AND claimant.source = 'natural_earth'
+  );
 
 INSERT INTO demscore.hex_mesh (country_id, hex_size_m, hex_n, id_key, geom)
 SELECT
@@ -640,6 +800,14 @@ BEGIN
         WHERE hm.hex_size_m = u.hex_size_m
           AND hm.geom ~= g.geom
           AND hm.geom = g.geom
+        -- Several countries can hold one cell -- a historical overlay over a
+        -- present-day country, or two islands sharing a cell whose centre is at
+        -- sea -- so pick the present-day holder, and break the remaining tie by
+        -- id rather than leaving it to the planner.
+        ORDER BY (
+          SELECT (c3.source = 'natural_earth')
+          FROM demscore.countries c3 WHERE c3.id = hm.country_id
+        ) DESC, hm.country_id
         LIMIT 1
       ) held ON TRUE
       LEFT JOIN demscore.countries oc ON oc.id = held.country_id
@@ -691,7 +859,13 @@ BEGIN
     USING hex_guarantee f
     WHERE hm.country_id = f.owner_id
       AND hm.hex_size_m = f.hex_size_m
-      AND hm.geom = f.hex_geom;
+      AND hm.geom = f.hex_geom
+      AND EXISTS (
+        SELECT 1 FROM demscore.countries owner, demscore.countries claimant
+        WHERE owner.id = f.owner_id AND claimant.id = f.country_id
+          AND owner.source = 'natural_earth'
+          AND claimant.source = 'natural_earth'
+      );
 
     INSERT INTO demscore.hex_mesh (country_id, hex_size_m, hex_n, id_key, geom)
     SELECT f.country_id, f.hex_size_m, 1, f.id_key, f.hex_geom::geometry(Polygon, 8857)
@@ -785,33 +959,46 @@ $$;
 -- be both slow and wrong at tile seams, where the union cannot see the
 -- neighbours just outside the request box. It is also unnecessary: a hexagon's
 -- class is its country's class, so the only edges that can ever be stroked are
--- the ones between two different countries, or between a country and nothing at
--- all. Those edges do not depend on the dataset, variable or year, so they are
--- precomputed once here and merely *filtered* per request.
+-- the ones where the hexagons meeting on them do not all belong to one country.
+-- Which edges those are does not depend on the dataset, variable or year, so
+-- they are precomputed once here and merely *filtered* per request. Edges whose
+-- hexagons all belong to one country are dropped and never drawn -- two thirds
+-- of them, 47 000 of 71 000 at 50 km.
 --
--- Every hexagon edge falls into one of three cases:
---   * shared by two hexagons of the same country -- can never separate two
---     colours, so it is dropped here and never drawn;
---   * shared by two hexagons of different countries -- drawn only when the two
---     countries fall in different classes (country_b holds the other side);
---   * held by one hexagon alone, the coastline of the mesh -- country_b is NULL,
---     and the edge is drawn whenever its own country has a value at all.
--- The render-time test is the same for all of them once an absent country reads
--- as a NULL class: `a.class_idx IS DISTINCT FROM b.class_idx`.
+-- It takes two tables because an edge can have more than two sides. Seating
+-- every country means cells that overlap -- one displaced onto a neighbour that
+-- held less of it, the finer `inset` cells laid over the coarse ones -- and the
+-- CShapes historical countries lay a second mesh over the current one, 6 740
+-- cells of Soviet Union over Russia and its neighbours at 50 km alone. So
+-- `hex_border_edges` holds the edge and its geometry, and `hex_border_sides`
+-- holds one row per country with hexagons on it. One row naming a country_a and
+-- a country_b cannot carry that: keeping only the lowest and highest country,
+-- as this table first did, dropped the third and with it 1 899 edges per mesh.
+--
+-- What the split buys is that the render-time question -- is there anything on
+-- the other side of this edge, and is it a different colour? -- is answered from
+-- the mesh as a whole rather than from the hexagons that happened to fall inside
+-- the request box. Counting only the countries a request actually renders, an
+-- edge is stroked when either
+--   * exactly one hexagon sits on it, so it is a perimeter with the map's
+--     background on the other side, or
+--   * the hexagons on it carry more than one class.
+-- Both read their counts out of `hex_border_sides`, so a tile cannot mistake the
+-- edge of its own request box for the edge of the map. Deriving them from what
+-- the box returned did exactly that: MapServer substitutes !BOX! with the extent
+-- of pixel *centres*, half a pixel smaller than the tile on every side, and the
+-- rim of the hexagons that came back was stroked as a dashed line along every
+-- tile seam.
+--
+-- `hex_count` is how many of that country's own hexagons touch the edge. It is
+-- normally one, and more where the country's own cells overlap -- which is what
+-- keeps an edge interior to that country even when a second country also has a
+-- cell on it, the Russia/Soviet Union case.
 --
 -- Matching edges by exact geometry is safe because the meshes come from
 -- ST_HexagonGrid, so hexagons of adjacent countries are cells of one global
 -- grid and a shared edge is bit-identical on both sides.
-CREATE TABLE demscore.hex_borders (
-  id BIGSERIAL PRIMARY KEY,
-  hex_size_m INTEGER NOT NULL,
-  country_a BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
-  -- NULL when no hexagon lies on the other side of the edge.
-  country_b BIGINT REFERENCES demscore.countries(id) ON DELETE CASCADE,
-  geom geometry(MultiLineString, 8857) NOT NULL
-);
-
-INSERT INTO demscore.hex_borders (hex_size_m, country_a, country_b, geom)
+CREATE TEMP TABLE hex_border_build ON COMMIT DROP AS
 WITH segments AS (
   SELECT
     hm.hex_size_m,
@@ -835,34 +1022,51 @@ WITH segments AS (
   SELECT
     hex_size_m,
     geom,
-    min(country_id) AS country_a,
-    CASE
-      WHEN min(country_id) = max(country_id) THEN NULL
-      ELSE max(country_id)
-    END AS country_b,
+    array_agg(country_id) AS countries,
     count(*) AS hex_count,
     count(DISTINCT country_id) AS country_count
   FROM directed
   GROUP BY hex_size_m, geom
 )
 SELECT
+  row_number() OVER () AS edge_id,
   hex_size_m,
-  country_a,
-  country_b,
-  -- One row per country pair per mesh, merged into continuous lines so the
-  -- stroke joins cleanly instead of being drawn as thousands of loose segments.
-  ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 8857) AS geom
+  geom,
+  countries
 FROM edges
-WHERE country_count = 2
-   OR hex_count = 1
-GROUP BY hex_size_m, country_a, country_b;
+WHERE country_count > 1
+   OR hex_count = 1;
 
-CREATE INDEX hex_borders_size_idx ON demscore.hex_borders (hex_size_m);
-CREATE INDEX hex_borders_geom_gix ON demscore.hex_borders USING GIST (geom);
+CREATE TABLE demscore.hex_border_edges (
+  id BIGINT PRIMARY KEY,
+  hex_size_m INTEGER NOT NULL,
+  geom geometry(LineString, 8857) NOT NULL
+);
+
+INSERT INTO demscore.hex_border_edges (id, hex_size_m, geom)
+SELECT edge_id, hex_size_m, geom::geometry(LineString, 8857)
+FROM hex_border_build;
+
+CREATE TABLE demscore.hex_border_sides (
+  edge_id BIGINT NOT NULL REFERENCES demscore.hex_border_edges(id) ON DELETE CASCADE,
+  country_id BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
+  hex_count INTEGER NOT NULL,
+  PRIMARY KEY (edge_id, country_id)
+);
+
+INSERT INTO demscore.hex_border_sides (edge_id, country_id, hex_count)
+SELECT b.edge_id, c, count(*)
+FROM hex_border_build b, unnest(b.countries) AS c
+GROUP BY b.edge_id, c;
+
+CREATE INDEX hex_border_edges_size_idx ON demscore.hex_border_edges (hex_size_m);
+CREATE INDEX hex_border_edges_geom_gix ON demscore.hex_border_edges USING GIST (geom);
+CREATE INDEX hex_border_sides_country_idx ON demscore.hex_border_sides (country_id);
 
 ANALYZE demscore.countries;
 ANALYZE demscore.hex_mesh;
-ANALYZE demscore.hex_borders;
+ANALYZE demscore.hex_border_edges;
+ANALYZE demscore.hex_border_sides;
 
 CREATE OR REPLACE FUNCTION demscore.country_scores(
   p_dataset TEXT DEFAULT 'v_dem',
@@ -944,6 +1148,99 @@ SELECT
   rc.max_value
 FROM ranked_countries rc
 JOIN normalized n ON TRUE;
+$$;
+
+-- What the source says, next to what the map can show.
+--
+-- demscore.country_scores() answers "what is on the map", and it can only ever
+-- answer for entities that have geometry. That makes a source country this
+-- deployment cannot draw indistinguishable, in every downstream reading, from
+-- one the source never measured -- and those are opposite facts. This function
+-- is the other half: one row per *source* coding unit that carries a value for
+-- this variable-year, drawn or not, with `map_status` saying which.
+--
+--   mapped                    -- resolved to geometry and on the map
+--   intentionally_unsupported -- a policy row names it and gives a reason
+--   unresolved                -- nothing covers it; setup fails on these
+--
+-- `geometry_confidence` comes along for the mapped rows because a value drawn
+-- on an 1815 snapshot and a value drawn on a present-day border are both just
+-- coloured hexagons in the WMS image, and a reader deserves to be told which
+-- they are looking at.
+CREATE OR REPLACE FUNCTION demscore.source_coverage(
+  p_dataset TEXT DEFAULT 'v_dem',
+  p_variable TEXT DEFAULT 'v2x_polyarchy',
+  p_year INTEGER DEFAULT 2020
+)
+RETURNS TABLE (
+  source_name TEXT,
+  source_iso3 TEXT,
+  value DOUBLE PRECISION,
+  map_status TEXT,
+  map_country_name TEXT,
+  geometry_source_dataset TEXT,
+  geometry_confidence TEXT,
+  reason TEXT
+)
+LANGUAGE SQL
+STABLE
+AS $$
+WITH normalized AS (
+  SELECT
+    CASE lower(p_dataset)
+      WHEN 'qog' THEN 'qog'
+      WHEN 'repdem' THEN 'repdem'
+      WHEN 'v_dem' THEN 'v_dem'
+      ELSE 'v_dem'
+    END AS dataset,
+    p_variable AS variable,
+    GREATEST(1500, LEAST(2100, p_year)) AS year
+), source_rows AS (
+  -- Grouped the same way demscore.country_scores() groups, so a source entity
+  -- here is the same thing a country there is and the two counts can be
+  -- subtracted from each other.
+  SELECT
+    COALESCE(dv.country_name, dv.iso3) AS source_name,
+    dv.iso3 AS source_iso3,
+    dv.country_id,
+    AVG(dv.value)::DOUBLE PRECISION AS value
+  FROM demscore.dataset_values dv
+  JOIN demscore.variables v ON v.id = dv.variable_id
+  JOIN normalized n
+    ON v.dataset = n.dataset
+   AND v.variable = n.variable
+   AND dv.year = n.year
+  GROUP BY 1, 2, 3
+)
+SELECT
+  sr.source_name,
+  sr.source_iso3,
+  sr.value,
+  CASE
+    WHEN sr.country_id IS NOT NULL THEN 'mapped'
+    WHEN unsupported.reason IS NOT NULL THEN 'intentionally_unsupported'
+    ELSE 'unresolved'
+  END AS map_status,
+  c.name AS map_country_name,
+  c.geometry_source_dataset,
+  c.geometry_confidence,
+  unsupported.reason
+FROM source_rows sr
+CROSS JOIN normalized n
+LEFT JOIN demscore.countries c ON c.id = sr.country_id
+LEFT JOIN LATERAL (
+  SELECT p.reason
+  FROM demscore.country_resolution_policy p
+  WHERE sr.country_id IS NULL
+    AND p.dataset = n.dataset
+    AND p.status = 'intentionally_unsupported'
+    AND (p.source_iso3 IS NULL OR (sr.source_iso3 IS NOT NULL AND upper(p.source_iso3) = upper(sr.source_iso3)))
+    AND (p.source_name IS NULL OR (sr.source_name IS NOT NULL AND lower(p.source_name) = lower(sr.source_name)))
+    AND (p.from_year IS NULL OR n.year >= p.from_year)
+    AND (p.to_year IS NULL OR n.year <= p.to_year)
+  ORDER BY p.id
+  LIMIT 1
+) unsupported ON TRUE;
 $$;
 
 CREATE OR REPLACE FUNCTION demscore.hex_variable(

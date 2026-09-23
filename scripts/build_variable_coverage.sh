@@ -61,26 +61,30 @@ with open(sys.argv[1], encoding="utf-8") as handle:
 
 datasets = {}
 for dataset, variables in counts.items():
-    # One shared axis per dataset, so two rows in the same list are directly
-    # comparable: the same x position means the same year on every strip.
     year_min = min(y for years in variables.values() for y in years)
     year_max = max(y for years in variables.values() for y in years)
-    span = year_max - year_min + 1
-    # A dataset narrower than the target would otherwise get sub-year buckets,
-    # which just resamples the same year into neighbouring bars.
-    buckets = min(bucket_target, span)
 
     # Density is normalized against the busiest year anywhere in the dataset, so a
     # sample covering 38 countries reads as lighter than one covering 194 rather
-    # than each variable being stretched to fill its own strip.
+    # than each variable's own busiest year being what full height means.
     dataset_max = max(c for years in variables.values() for c in years.values())
-
-    # Bucket i covers years [edges[i], edges[i + 1]), which spreads the remainder
-    # instead of piling it onto the last bar.
-    edges = [year_min + (i * span) // buckets for i in range(buckets + 1)]
 
     variable_payload = {}
     for variable, years in sorted(variables.items()):
+        # Each strip is bucketed across its own first-to-last year, not the
+        # dataset's: the row writes those two years underneath itself, so the
+        # scale is legible per row, and every variable gets the full width of
+        # the track at the finest step its span allows. A shared axis instead
+        # spent most of a QoG row drawing the century before QoG starts.
+        var_min, var_max = min(years), max(years)
+        span = var_max - var_min + 1
+        # A span narrower than the target would otherwise get sub-year buckets,
+        # which just resamples the same year into neighbouring bars.
+        buckets = min(bucket_target, span)
+        # Bucket i covers years [edges[i], edges[i + 1]), which spreads the
+        # remainder instead of piling it onto the last bar.
+        edges = [var_min + (i * span) // buckets for i in range(buckets + 1)]
+
         levels = []
         for i in range(buckets):
             lo, hi = edges[i], edges[i + 1]
@@ -95,18 +99,19 @@ for dataset, variables in counts.items():
             levels.append(0 if ratio <= 0 else max(1, min(9, 1 + round(8 * ratio))))
 
         variable_payload[variable] = {
-            "yearMin": min(years),
-            "yearMax": max(years),
+            "yearMin": var_min,
+            "yearMax": var_max,
             "maxCountries": max(years.values()),
             # One digit per bucket keeps the whole file well under the size at
             # which we would have to think about lazy-loading it per dataset.
             "levels": "".join(str(level) for level in levels),
         }
 
+    # The dataset span is no longer what the strips are drawn against; it is
+    # kept because the coverage text and the build log both quote it.
     datasets[dataset] = {
         "yearMin": year_min,
         "yearMax": year_max,
-        "bucketCount": buckets,
         "maxCountries": dataset_max,
         "variables": variable_payload,
     }
@@ -124,7 +129,7 @@ with open(out_file, "w", encoding="utf-8") as handle:
 for dataset, entry in sorted(datasets.items()):
     print(
         f"  {dataset}: {len(entry['variables'])} variables, "
-        f"{entry['yearMin']}-{entry['yearMax']} in {entry['bucketCount']} buckets, "
+        f"{entry['yearMin']}-{entry['yearMax']}, "
         f"max {entry['maxCountries']} countries"
     )
 PY

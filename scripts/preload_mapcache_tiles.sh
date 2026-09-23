@@ -31,11 +31,14 @@ Options:
   --latest-year-only     Warm only each variable's latest available year
   --dataset LIST         Comma-separated dataset filter (e.g. qog,repdem)
   --max-requests N       Stop after N requests (for smoke testing)
+  --clear                Empty the server tile cache before warming it, so the
+                         run renders every tile again instead of re-reading the
+                         copies the proxy already holds
   --dry-run              Print what would be requested without curl fetches
   -h, --help             Show this help
 
 Environment knobs:
-  MAPCACHE_BASE_URL      Default: http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map
+  MAPCACHE_BASE_URL      Default: http://127.0.0.1:<DEMSCORE_ROUTER_PORT or 8090>/mapserver?map=/etc/mapserver/mapserver.map
   PGUSER                 Default: demscore
   PGDATABASE             Default: demscore
 
@@ -61,6 +64,7 @@ PALETTE_FILTER="default,indigo_amber,viridis,cividis"
 LATEST_YEAR_ONLY=0
 DATASET_FILTER=""
 MAX_REQUESTS=0
+CLEAR_CACHE=0
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -83,6 +87,8 @@ while [[ $# -gt 0 ]]; do
       DATASET_FILTER="$2"; shift 2 ;;
     --max-requests)
       MAX_REQUESTS="$2"; shift 2 ;;
+    --clear)
+      CLEAR_CACHE=1; shift ;;
     --dry-run)
       DRY_RUN=1; shift ;;
     -h|--help)
@@ -130,7 +136,7 @@ if ! podman compose ps --format '{{.Service}}\t{{.State}}' 2>/dev/null | awk -F'
   exit 1
 fi
 
-MAPCACHE_BASE_URL="${MAPCACHE_BASE_URL:-http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map}"
+MAPCACHE_BASE_URL="${MAPCACHE_BASE_URL:-http://127.0.0.1:${DEMSCORE_ROUTER_PORT:-8090}/mapserver?map=/etc/mapserver/mapserver.map}"
 PGUSER="${PGUSER:-demscore}"
 PGDATABASE="${PGDATABASE:-demscore}"
 
@@ -383,6 +389,17 @@ echo "- tiles per combo: ${tile_count}"
 echo "- planned requests: ${planned_requests}"
 if (( DRY_RUN == 1 )); then
   echo "- mode: dry-run (no HTTP requests)"
+fi
+
+# Clearing belongs before the warm-up, not after: a preload only asks for tiles,
+# and a URL the proxy already holds is answered from the cache, so a warm-up over
+# a stale cache keeps the stale tiles and adds nothing.
+if (( CLEAR_CACHE == 1 )); then
+  if (( DRY_RUN == 1 )); then
+    echo "- would clear the server tile cache first (skipped in dry-run)"
+  else
+    "$ROOT_DIR/scripts/clear_map_tile_cache.sh"
+  fi
 fi
 
 request_idx=0

@@ -32,9 +32,13 @@ The world box is `-17243960 -8392928 17243960 8392928`. Do not derive that by tr
   (`LAYERS=hex_variable,hex_inset,hex_outline`); omit it to get the fills alone. An inset's
   edges match nothing, so it is outlined all the way round and reads as a country rather than a
   blemish on the cell under it. It reads
-  `demscore.hex_borders`, the precomputed table of every hexagon edge that could ever separate
-  two colors, and ignores `polarity` -- that only changes the color ramp, and cannot change
-  which sides match.
+  `demscore.hex_border_edges` and `demscore.hex_border_sides`, the precomputed table of every
+  hexagon edge that could ever separate two colors together with the countries whose hexagons
+  touch each one, and ignores `polarity` -- that only changes the color ramp, and cannot change
+  which sides match. Deciding an edge from the sides table rather than from the hexagons the
+  request box returned is deliberate: `!BOX!` is half a pixel smaller than the tile, so a
+  per-request recomputation strokes the rim of its own box and dashes a line along every tile
+  seam.
 
 ## Runtime Parameters
 

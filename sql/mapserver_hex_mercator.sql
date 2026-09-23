@@ -71,6 +71,8 @@ SET geom_3857 = ST_Multi(
 CREATE INDEX IF NOT EXISTS countries_geom_3857_gix
   ON demscore.countries USING GIST (geom_3857);
 
+DROP TABLE IF EXISTS demscore.hex_border_sides_mercator;
+DROP TABLE IF EXISTS demscore.hex_border_edges_mercator;
 DROP TABLE IF EXISTS demscore.hex_borders_mercator;
 DROP TABLE IF EXISTS demscore.hex_mesh_mercator;
 
@@ -186,6 +188,20 @@ FROM ranked_hexes;
 -- cells that are a quarter country or better, so the extra hexagon is real land
 -- and not a clipped corner. Denmark comes out with two cells at 100k, which is
 -- what 42 777 km2 buys against a 25 980 km2 cell.
+-- A historical country borrows a cell; it never takes one.
+--
+-- The dealing below moves cells between countries, which is right while the
+-- mesh is a partition of the grid among the countries on the map at once. The
+-- historical rows are not part of that partition: they are an overlay, drawn
+-- for the years they were in force and invisible otherwise. Letting one of them
+-- take a cell removes it from a present-day country in *every* year -- Germany
+-- fell from 11 cells to 6 at 100 km once the pre-unification states arrived,
+-- and Ukraine had already lost four to the Soviet Union. So the claim logic is
+-- unchanged and only the eviction is conditional: when either side of a
+-- transfer is historical, the claimant gets the cell and the owner keeps it
+-- too. Two countries then hold the same geometry, which the border tables
+-- already allow for and which is what the Soviet mesh lying over Russia has
+-- always been. See the same note in sql/mapserver_hex_setup.sql.
 CREATE TEMP TABLE hex_fallback_mercator ON COMMIT DROP AS
 WITH sizes AS (
   SELECT generate_series(40000, 600000, 10000)::INT AS hex_size_m
@@ -212,6 +228,10 @@ WITH sizes AS (
     (
       SELECT c2.id FROM demscore.countries c2
       WHERE ST_Within(ST_PointOnSurface(g.geom), c2.geom_3857)
+      -- A historical polygon can contain this centre too, and the owner has to
+      -- be the country that holds the cell in the partition, not whichever row
+      -- the planner reached first.
+      ORDER BY (c2.source = 'natural_earth') DESC, c2.id
       LIMIT 1
     ) AS owner_id,
     -- The most any other country holds of this cell, owner or not.
@@ -278,15 +298,22 @@ FROM (
 WHERE w.owner_id IS NULL
    OR w.take_rank <= w.owner_cells - 1;
 
--- A cell has one owner, so the country that had it gives it up. Matching by
--- geometry is exact because both sides are cells of the same global
--- ST_HexagonGrid -- the same reason the border table below groups segments
--- by geometry.
+-- The country that had it gives it up -- unless either side is historical, in
+-- which case the claimant only borrows it and the owner keeps it too (see the
+-- note above this pass). Matching by geometry is exact because both sides are
+-- cells of the same global ST_HexagonGrid -- the same reason the border table
+-- below groups segments by geometry.
 DELETE FROM demscore.hex_mesh_mercator hm
 USING hex_fallback_mercator f
 WHERE hm.country_id = f.owner_id
   AND hm.hex_size_m = f.hex_size_m
-  AND hm.geom = f.hex_geom;
+  AND hm.geom = f.hex_geom
+  AND EXISTS (
+    SELECT 1 FROM demscore.countries owner, demscore.countries claimant
+    WHERE owner.id = f.owner_id AND claimant.id = f.country_id
+      AND owner.source = 'natural_earth'
+      AND claimant.source = 'natural_earth'
+  );
 
 INSERT INTO demscore.hex_mesh_mercator (country_id, hex_size_m, hex_n, id_key, geom)
 SELECT
@@ -362,6 +389,14 @@ BEGIN
         WHERE hm.hex_size_m = u.hex_size_m
           AND hm.geom ~= g.geom
           AND hm.geom = g.geom
+        -- Several countries can hold one cell -- a historical overlay over a
+        -- present-day country, or two islands sharing a cell whose centre is at
+        -- sea -- so pick the present-day holder, and break the remaining tie by
+        -- id rather than leaving it to the planner.
+        ORDER BY (
+          SELECT (c3.source = 'natural_earth')
+          FROM demscore.countries c3 WHERE c3.id = hm.country_id
+        ) DESC, hm.country_id
         LIMIT 1
       ) held ON TRUE
       LEFT JOIN demscore.countries oc ON oc.id = held.country_id
@@ -413,7 +448,13 @@ BEGIN
     USING hex_guarantee_mercator f
     WHERE hm.country_id = f.owner_id
       AND hm.hex_size_m = f.hex_size_m
-      AND hm.geom = f.hex_geom;
+      AND hm.geom = f.hex_geom
+      AND EXISTS (
+        SELECT 1 FROM demscore.countries owner, demscore.countries claimant
+        WHERE owner.id = f.owner_id AND claimant.id = f.country_id
+          AND owner.source = 'natural_earth'
+          AND claimant.source = 'natural_earth'
+      );
 
     INSERT INTO demscore.hex_mesh_mercator (country_id, hex_size_m, hex_n, id_key, geom)
     SELECT f.country_id, f.hex_size_m, 1, f.id_key, f.hex_geom::geometry(Polygon, 3857)
@@ -496,18 +537,12 @@ END;
 $$;
 
 -- The edges that can ever separate one colour from the next, exactly as
--- demscore.hex_borders is built for the Equal Earth mesh -- see the long note
--- there for why the perimeter is precomputed rather than dissolved per tile,
--- and why matching edges by exact geometry is safe.
-CREATE TABLE demscore.hex_borders_mercator (
-  id BIGSERIAL PRIMARY KEY,
-  hex_size_m INTEGER NOT NULL,
-  country_a BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
-  country_b BIGINT REFERENCES demscore.countries(id) ON DELETE CASCADE,
-  geom geometry(MultiLineString, 3857) NOT NULL
-);
-
-INSERT INTO demscore.hex_borders_mercator (hex_size_m, country_a, country_b, geom)
+-- demscore.hex_border_edges and demscore.hex_border_sides are built for the
+-- Equal Earth mesh -- see the long note there for why the perimeter is
+-- precomputed rather than dissolved per tile, why an edge needs a row per
+-- country rather than a country_a and a country_b, and why matching edges by
+-- exact geometry is safe.
+CREATE TEMP TABLE hex_border_build_mercator ON COMMIT DROP AS
 WITH segments AS (
   SELECT
     hm.hex_size_m,
@@ -529,31 +564,53 @@ WITH segments AS (
   SELECT
     hex_size_m,
     geom,
-    min(country_id) AS country_a,
-    CASE
-      WHEN min(country_id) = max(country_id) THEN NULL
-      ELSE max(country_id)
-    END AS country_b,
+    array_agg(country_id) AS countries,
     count(*) AS hex_count,
     count(DISTINCT country_id) AS country_count
   FROM directed
   GROUP BY hex_size_m, geom
 )
 SELECT
+  row_number() OVER () AS edge_id,
   hex_size_m,
-  country_a,
-  country_b,
-  ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 3857) AS geom
+  geom,
+  countries
 FROM edges
-WHERE country_count = 2
-   OR hex_count = 1
-GROUP BY hex_size_m, country_a, country_b;
+WHERE country_count > 1
+   OR hex_count = 1;
 
-CREATE INDEX hex_borders_mercator_size_idx ON demscore.hex_borders_mercator (hex_size_m);
-CREATE INDEX hex_borders_mercator_geom_gix ON demscore.hex_borders_mercator USING GIST (geom);
+CREATE TABLE demscore.hex_border_edges_mercator (
+  id BIGINT PRIMARY KEY,
+  hex_size_m INTEGER NOT NULL,
+  geom geometry(LineString, 3857) NOT NULL
+);
+
+INSERT INTO demscore.hex_border_edges_mercator (id, hex_size_m, geom)
+SELECT edge_id, hex_size_m, geom::geometry(LineString, 3857)
+FROM hex_border_build_mercator;
+
+CREATE TABLE demscore.hex_border_sides_mercator (
+  edge_id BIGINT NOT NULL REFERENCES demscore.hex_border_edges_mercator(id) ON DELETE CASCADE,
+  country_id BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
+  hex_count INTEGER NOT NULL,
+  PRIMARY KEY (edge_id, country_id)
+);
+
+INSERT INTO demscore.hex_border_sides_mercator (edge_id, country_id, hex_count)
+SELECT b.edge_id, c, count(*)
+FROM hex_border_build_mercator b, unnest(b.countries) AS c
+GROUP BY b.edge_id, c;
+
+CREATE INDEX hex_border_edges_mercator_size_idx
+  ON demscore.hex_border_edges_mercator (hex_size_m);
+CREATE INDEX hex_border_edges_mercator_geom_gix
+  ON demscore.hex_border_edges_mercator USING GIST (geom);
+CREATE INDEX hex_border_sides_mercator_country_idx
+  ON demscore.hex_border_sides_mercator (country_id);
 
 ANALYZE demscore.countries;
 ANALYZE demscore.hex_mesh_mercator;
-ANALYZE demscore.hex_borders_mercator;
+ANALYZE demscore.hex_border_edges_mercator;
+ANALYZE demscore.hex_border_sides_mercator;
 
 COMMIT;

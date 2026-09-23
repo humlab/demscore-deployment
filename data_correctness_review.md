@@ -6,88 +6,132 @@ presentation paths.
 
 ## Summary
 
-Two user-facing correctness problems were found:
+This review originally found two user-facing correctness problems. Both are now
+fixed:
 
-1. Source observations for countries that do not match the Natural Earth 110m
-   country table are silently deleted during map setup. The UI then reports the
-   reduced Natural Earth universe as if it were the source data universe.
-2. The map uses `ntile(7)` over country values, which can split identical source
-   values across different color classes. This makes countries with the same
-   value appear different on the map.
+1. Unmatched source observations are no longer silently deleted, and they are no
+   longer merely audited either. QoG and REPDEM map fully; V-Dem maps 99.74% of
+   its loaded values, and the 8,308 that remain (0.26%, all South Yemen before
+   1967) are covered by an explicit `intentionally_unsupported` policy row.
+   Setup fails on any unmapped observation that is not.
+2. The old `ntile(7)` classing bug has been fixed. `demscore.country_scores()`
+   now classes distinct values, so equal values receive the same class. A live
+   scan across visible variable-years found zero split value groups.
 
 Other reviewed areas were broadly consistent: the CSV melt excludes identifier
 columns, filters Demscore's `-11111` missing marker, metadata matching is
 complete in the live database, map colors and legend colors match, and the
 legend/table read from the same `country_scores()` function used by WMS.
 
-## Finding 1: Unmatched Source Countries Are Dropped
+## Finding 1: Every Source Observation Now Has an Explicit Outcome
 
-Severity: High
+Severity: Resolved
 
-The CSV import initially keeps source values with country names and, where
-available, ISO-style identifiers. During map setup, `sql/mapserver_hex_setup.sql`
-maps those rows to `demscore.countries` using:
-
-- ISO3 match against `demscore.countries.iso_a3`
-- exact lowercased name match against `demscore.countries.name`
-
-Rows that still have no `country_id` are then deleted:
+The original review found that rows still lacking `country_id` after matching
+were deleted outright:
 
 ```sql
 DELETE FROM demscore.dataset_values
 WHERE country_id IS NULL;
 ```
 
-This means country observations can disappear from the database because they do
-not exist in, or do not exactly match, the Natural Earth 110m country layer. The
-loss is not limited to historical states. It includes current/recent small
-states and naming mismatches.
+A first fix replaced the delete with `demscore.dataset_value_unmapped_audit`.
+That stopped the data loss but left 145,045 V-Dem values (4.55%) audited and
+undrawable, with no record of whether that was a decision or an oversight.
 
-Measured impact against the current source files:
+Both halves are now closed. `sql/historical_geometry.sql` adds a curated
+historical geometry registry and a resolution policy, and
+`scripts/check_country_resolution.sh` fails setup unless every unmapped
+observation is covered by a policy row that says why.
 
-| Dataset | User-facing/source scope | Values dropped | Countries affected |
-| --- | ---: | ---: | ---: |
-| QoG | visible numeric values, excluding intended OECD duplicate side | 5,136 / 55,611 (9.2%) | 32 |
-| REPDEM | visible variables | 328 / 17,976 (1.8%) | 1 |
-| REPDEM | all numeric values, including hidden WECEE side | 624 / 30,311 (2.1%) | 1 |
-| V-Dem | all loaded numeric values | 343,443 / 3,189,614 (10.8%) | 37 |
+### Live result
 
-Examples of dropped current/recent countries:
+| Dataset | Loaded values | Mapped | Intentionally unsupported | Unresolved |
+| --- | ---: | ---: | ---: | ---: |
+| QoG | 55,611 | 55,611 (100.00%) | 0 | 0 |
+| REPDEM | 30,311 | 30,311 (100.00%) | 0 | 0 |
+| V-Dem | 3,189,614 | 3,181,306 (99.74%) | 8,308 | 0 |
 
-- QoG: Singapore, Malta, Bahrain, Barbados, Mauritius, Maldives, Cabo Verde,
-  Saint Lucia, Samoa, San Marino, Tonga, Tuvalu.
-- V-Dem: Singapore, Hong Kong, Barbados, Cape Verde, Malta, Maldives, Mauritius,
-  Bahrain, Palestine/Gaza, Palestine/West Bank.
-- REPDEM: Czechia. Natural Earth has `ADM0_A3 = CZE`, but its `NAME_LONG` is
-  `Czech Republic`; the source name is `Czechia`, and REPDEM has no ISO column in
-  the loader.
+The 145,045 previously undrawable V-Dem values resolved as follows, counted by
+the `geometry_source_dataset` each one is now drawn on:
 
-Why this misrepresents the data:
+| Resolution | Values | Confidence | Geometry |
+| --- | ---: | --- | --- |
+| `cshapes_europe` | 68,641 | high | 17 pre-unification German and Italian states, on their own border-change periods |
+| `cshapes_europe_extended` | 22,804 | medium / low | The same polygons carried back to 1789 and forward to the 1871 unification year |
+| `cshapes_2.0_extended` | 15,804 | high / low | Zanzibar before 1890 and after 1964; Gaza, the West Bank and the British Mandate outside CShapes' own spans |
+| `historical_basemaps` | 14,493 | low | Bavaria before 1806, Saxony before 1815, and Hanover, Hamburg and Tuscany, which CShapes-Europe does not carry separately |
+| `natural_earth_50m` | 9,912 | medium | V-Dem's Republic of Vietnam before the 1954 partition |
+| `cshapes_2.0_derived` | 5,083 | high | The West Bank and Gaza as one polygon, for the years V-Dem's unit covers both |
+| Intentionally unsupported | 8,308 | — | South Yemen before 1967 |
 
-- The map/table universe is `demscore.countries`, not the source dataset's
-  country universe.
-- Backend totals come from `count(*) FROM demscore.countries`.
-- The UI says countries without a value are drawn as plain land, but dropped
-  source countries are not counted as no-data countries. They are absent from
-  the map/table universe entirely.
+Of the 136,737 values that changed from undrawable to drawn, 63.9% sit on a
+period-aware boundary the source says was in force that year (`high`), 16.4% on
+such a boundary carried across years the coding-unit history documents as
+unchanged (`medium`), and 19.7% on a snapshot or a knowingly wrong extent
+(`low`). Every `low` row records in `notes` what it is getting wrong.
 
-Recommended fixes:
+### What the fix is made of
 
-1. Do not delete unmatched observations silently. Keep them with an
-   `unmapped_reason` or move them to an audit table.
-2. Add a required setup report that lists unmatched countries, years, variables,
-   and value counts by dataset.
-3. Add explicit aliases for naming mismatches such as `Czechia -> Czech Republic`.
-4. Add geometry support for small states missing from Natural Earth 110m, for
-   example point/inset geometries or a higher-resolution country source.
-5. Expose source-country coverage separately from map-country coverage in the UI
-   until all source countries can be represented.
+- `demscore.historical_country_geometries_src` — one row per (entity, year span,
+  polygon) with `source_dataset`, `source_license`, `source_url`,
+  `source_citation`, `source_snapshot_year`, `confidence` and `notes`. An
+  exclusion constraint refuses two overlapping periods for one entity, a
+  snapshot row cannot be graded above `low`, and a `low` row must state in
+  `notes` what it is getting wrong.
+- `demscore.country_resolution_policy` — replaces `demscore.country_aliases`.
+  One row per (dataset, source entity, year window) with a status of
+  `natural_earth`, `cshapes`, `historical_registry` or
+  `intentionally_unsupported`. The last is what the alias table could not
+  express.
+- Matching now runs policy first and the source's own ISO3 and name afterwards,
+  and an `intentionally_unsupported` row clears any `country_id` a later pass
+  set, so a refusal is enforced rather than hoped for.
+- `demscore.source_coverage()` and `/api/source-coverage` report what the source
+  measured against what the map can draw, so "the source never measured this"
+  and "this deployment cannot draw it" stop being the same answer.
+- `/api/map-data` rows now carry `historical`, `validFromYear`/`validToYear`,
+  `geometrySource` and `geometryConfidence`.
 
-## Finding 2: `ntile(7)` Splits Equal Values Across Classes
+### Three coding units that needed period-aware handling
 
-Severity: High
+Reading V-Dem's own country coding units document changed the answer in three
+places where a single polygon per entity would have been wrong:
 
-`demscore.country_scores()` computes color classes with:
+- **Palestine/West Bank** covers the West Bank *and* Gaza from 1968 to 2006, and
+  the West Bank alone for 1948-1967 and from 2007. The registry holds all three
+  periods, the middle one as a union of the two CShapes polygons.
+- **Republic of Vietnam** is the whole of Vietnam from 1802 — the Nguyen empire,
+  then Tonkin, Annam and Cochinchina inside French Indochina — and only South
+  Vietnam from 1955. Drawing the early years on the South Vietnam polygon would
+  have put a value for the whole country on half of it. It is a country row of
+  its own rather than an alias onto modern Vietnam, because V-Dem codes a
+  northern unit from 1945 and `country_scores()` would have averaged the two.
+- **Zanzibar** is coded from 1856 and continues after the 1964 union with
+  Tanganyika, on either side of the 1890-1964 span CShapes covers.
+
+### Remaining risk
+
+Eleven of the 67 historical country-periods rest on a world snapshot standing in
+for a span of years, or on a polygon known to be the wrong size. That is mostly
+a difference a hex map cannot express: six of the eleven are a single hexagon at
+every size the app offers, and Baden before 1816 is drawn five times too large
+and is one hexagon either way. The two that do bite are territorial rather than
+imprecise — Two Sicilies before 1816 includes Sicily and Piedmont-Sardinia
+includes Savoy and Nice, neither of which those units held. Both are recorded in
+the registry's `notes`; `country_polygon_considerations.md` has the register and
+the measurements.
+
+What the picture genuinely cannot carry is the difference between a country the
+source never measured and one this deployment cannot draw. `/api/source-coverage`
+answers that; no client consumes it yet.
+
+## Finding 2: Equal Values Preserve Class Membership
+
+Severity: Resolved
+
+The original review found that `demscore.country_scores()` computed color
+classes with:
 
 ```sql
 ntile(7) OVER (ORDER BY cv.value) AS class_idx
@@ -97,13 +141,25 @@ ntile(7) OVER (ORDER BY cv.value) AS class_idx
 countries share the same value, the same value can appear in multiple classes
 and therefore multiple colors.
 
-Concrete live example:
+That implementation is no longer present. Current `country_scores()` classes
+distinct values: it selects the distinct value set, ranks those values with
+`dense_rank()`, and joins the resulting class back to all countries with that
+value. Equal values therefore receive the same `class_idx`.
+
+Original concrete example:
 
 For `repdem_basic_govtype` in 2020:
 
 - value `1` is assigned to classes 1, 2, and 3.
 - value `3` is assigned to classes 3, 4, and 5.
 - value `4` is assigned to classes 6 and 7.
+
+Verified current live result for the same variable-year:
+
+- value `1` is assigned only to class 1.
+- value `2` is assigned only to class 2.
+- value `3` is assigned only to class 3.
+- value `4` is assigned only to class 4.
 
 This is especially misleading for categorical and low-cardinality variables.
 `repdem_basic_govtype` is documented as categories:
@@ -114,10 +170,12 @@ This is especially misleading for categorical and low-cardinality variables.
 - `4`: surplus majority coalition
 - `5`: non-partisan cabinet
 
-The map currently makes countries with the same category appear different.
+The current map no longer makes countries with the same exact value appear in
+different classes. A live scan across visible variable-year combinations found
+zero `(dataset, variable, year, value)` groups assigned to more than one class.
 
-The issue is user-facing beyond this one variable. In the current offered
-variable set, split ties were found in variables including:
+The original issue was user-facing beyond this one variable. Split ties had
+been found in variables including:
 
 - `repdem_basic_govtype`
 - `repdem_basic_cab_num_parties`
@@ -134,17 +192,16 @@ Why this misrepresents the data:
 
 - The legend and data table describe seven quantile classes from low to high.
 - The table says class 1 is the lowest seventh and class 7 is the highest.
-- With split ties, class membership can reflect row position rather than value.
-  Equal values no longer mean equal visual treatment.
+- With split ties, class membership reflected row position rather than value.
+  The current distinct-value classing removes that failure mode.
 
-Recommended fixes:
+Remaining recommended fixes:
 
-1. Replace `ntile(7)` with a classing method that preserves equal values.
-2. If preserving ties results in fewer populated classes, show fewer populated
+1. If preserving ties results in fewer populated classes, show fewer populated
    classes rather than forcing seven.
-3. Render categorical variables with category-aware colors and labels instead of
+2. Render categorical variables with category-aware colors and labels instead of
    numeric quantiles.
-4. Add tests/assertions that no `(dataset, variable, year, value)` appears in
+3. Add tests/assertions that no `(dataset, variable, year, value)` appears in
    more than one rendered class for UI-offered variables.
 
 ## Reviewed Areas That Were Consistent
@@ -169,9 +226,11 @@ Recommended fixes:
 
 ## Suggested Follow-Up Checks
 
-- Add a setup-time SQL or script check for unmatched country observations, and
-  fail CI/setup unless the unmatched set is explicitly approved.
-- Add a setup-time check for split ties across rendered classes.
-- Add a source-vs-map coverage endpoint so the UI can distinguish "source has no
-  value" from "source value exists but cannot be mapped".
+- Split `confidence` on the axis that matters: an imprecise border is absorbed
+  by the hex grid, a polygon covering land the unit did not hold is not. The
+  grade currently conflates them.
+- Add a setup-time check for split ties across rendered classes to prevent a
+  regression to row-position classing.
+- Consume `/api/source-coverage` in the UI, so a reader can see that a country
+  the source measured is missing from the map rather than missing from the data.
 - Add per-variable rendering metadata for categorical variables.

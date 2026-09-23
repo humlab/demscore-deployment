@@ -519,7 +519,12 @@ async function getMapData(dataset, variable, year) {
        c.name AS country,
        NULLIF(trim(c.iso_a3), '') AS iso3,
        cs.value::DOUBLE PRECISION AS value,
-       cs.class_idx::INT AS class_idx
+       cs.class_idx::INT AS class_idx,
+       c.source AS country_source,
+       c.valid_from_year,
+       c.valid_to_year,
+       c.geometry_source_dataset,
+       c.geometry_confidence
      FROM demscore.countries c
      LEFT JOIN scores cs
        ON cs.country_id = c.id
@@ -534,7 +539,67 @@ async function getMapData(dataset, variable, year) {
     iso3: row.iso3,
     value: row.value,
     classIndex: row.class_idx,
+    historical: row.country_source !== "natural_earth",
+    validFromYear: row.valid_from_year,
+    validToYear: row.valid_to_year,
+    // A hexagon drawn on an 1815 snapshot and one drawn on a present-day border
+    // are the same picture. This is the only place a reader can be told which,
+    // so the row carries it even though the map cannot.
+    geometrySource: row.geometry_source_dataset,
+    geometryConfidence: row.geometry_confidence,
   }));
+}
+
+// What the source measured for this variable-year, against what the map can
+// draw of it.
+//
+// getMapData answers "what is on the map" and getClassBreaks counts it. Neither
+// can see a source country this deployment has no geometry for, and to a reader
+// that is indistinguishable from the source never having measured it -- which
+// is the opposite fact. demscore.source_coverage() is the other half, and this
+// is where it reaches the client: the unrepresented entities by name, with the
+// reason this deployment cannot draw them, and a count of how many of the drawn
+// ones rest on a low-confidence historical outline.
+async function getSourceCoverage(dataset, variable, year) {
+  const result = await pool.query(
+    `SELECT
+       source_name,
+       source_iso3,
+       value,
+       map_status,
+       map_country_name,
+       geometry_source_dataset,
+       geometry_confidence,
+       reason
+     FROM demscore.source_coverage($1, $2, $3)
+     ORDER BY source_name;`,
+    [dataset, variable, year],
+  );
+
+  const rows = result.rows;
+  const mapped = rows.filter((row) => row.map_status === "mapped");
+  const unrepresented = rows.filter((row) => row.map_status !== "mapped");
+
+  const byConfidence = { high: 0, medium: 0, low: 0 };
+  for (const row of mapped) {
+    if (row.geometry_confidence in byConfidence) byConfidence[row.geometry_confidence] += 1;
+  }
+
+  return {
+    sourceCountries: rows.length,
+    mappedCountries: mapped.length,
+    unrepresentedCountries: unrepresented.length,
+    mappedByGeometryConfidence: byConfidence,
+    unrepresented: unrepresented.map((row) => ({
+      country: row.source_name,
+      iso3: row.source_iso3,
+      value: row.value,
+      // 'intentionally_unsupported' carries a reason; 'unresolved' means no
+      // policy covers it at all, which setup is supposed to have failed on.
+      status: row.map_status,
+      reason: row.reason,
+    })),
+  };
 }
 
 async function getLandBasemapGeoJson() {
@@ -663,6 +728,18 @@ app.get("/api/class-breaks", asyncRoute(async (req, res) => {
   res
     .set("Cache-Control", "public, max-age=3600")
     .json({ ...params, ...breaks });
+}));
+
+// How much of what the source measured this map is able to show. Same
+// dataset/variable/year triple as the WMS request and the two routes above.
+app.get("/api/source-coverage", asyncRoute(async (req, res) => {
+  const params = readMapStateQuery(req, res);
+  if (!params) return;
+
+  const coverage = await getSourceCoverage(params.dataset, params.variable, params.year);
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json({ ...params, ...coverage });
 }));
 
 // The map's contents as rows, for readers who cannot be shown an image of them.

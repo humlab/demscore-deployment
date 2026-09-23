@@ -7,7 +7,9 @@
 # Prerequisites:
 #   - TLS certificate (e.g. via certbot/Let's Encrypt)
 #   - Demscore containers running (./scripts/dev_up.sh)
-#   - Router container exposed on port 8090 (the only exposed port)
+#   - Router container exposed on port 8090 (the only exposed port; matches
+#     DEMSCORE_ROUTER_PORT in .env, default 8090 -- update every 8090 below
+#     if you changed it)
 #
 # All traffic — including /api/* and /mapserver/* — must go through the
 # Demscore router container (port 8090).  Do NOT add separate location blocks

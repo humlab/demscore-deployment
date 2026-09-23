@@ -73,6 +73,30 @@ The system turns tabular democracy indicator data into a thematic global hex map
    - `demscore.cshapes_src` from `CShapes-2.0.geojson` — time-bounded historical country
      geometry for source observations whose country-year unit no longer exists in Natural
      Earth's current-country layer
+   - `demscore.cshapes_europe_src` from `CShapes-Europe.geojson` — the same project's
+     European series from 1816, which is where the pre-unification German and Italian
+     states come from. The import renames its columns to `cshapes_src`'s names, and gives
+     the FID a column of its own: CShapes-Europe reuses one Gleditsch-Ward code across
+     every period of a country, so `ogr2ogr`'s default promotion of a field called `Id`
+     to the primary key collides on the second period of the first country
+   - `demscore.historical_basemaps_src` from `historical_basemaps/world_{1783,1800,1815}.geojson`
+     — world snapshots, all three in one table with the snapshot year as a column
+4b. `sql/historical_geometry.sql` builds the two tables that decide what a source
+    observation is allowed to become:
+   - `demscore.historical_country_geometries_src`, the curated geometry registry. One row
+     per (entity, year span, polygon), carrying `source_dataset`, `source_license`,
+     `source_url`, `source_citation`, `source_snapshot_year`, `valid_from_year`,
+     `valid_to_year` and a `confidence` grade. It holds its own copy of every polygon
+     rather than pointing at the upstream tables, because a snapshot reconstruction and a
+     period-aware boundary can only share a table if each carries its own provenance. One
+     entity's periods may not overlap, which is an exclusion constraint rather than a check
+     somebody remembers to run — an overlap would draw the same country twice
+   - `demscore.country_resolution_policy`, which replaces `demscore.country_aliases`. One
+     row per (dataset, source entity, year window) with a `status` of `natural_earth`,
+     `cshapes`, `historical_registry` or `intentionally_unsupported`. The last is the
+     reason the table exists: an alias could say "map this to that" but had no way to say
+     "this one is not representable, and here is why", so the difference between a decision
+     and an oversight was invisible
 5. `sql/mapserver_hex_setup.sql`:
    - normalizes country geometry into `demscore.countries` (4326 + 8857), taking identity
      from `countries_src` and geometry from the map units dissolved per `adm0_a3`, minus
@@ -81,31 +105,52 @@ The system turns tabular democracy indicator data into a thematic global hex map
      territories an ocean away; with it, France is metropolitan France plus Corsica.
      Sovereigns drawn as a single unit are always kept, so Western Sahara (`SAH`/`ESH`)
      and South Sudan (`SDS`/`SSD`) survive despite `adm0_a3` differing from their ISO code.
-  - remaps `demscore.dataset_values.country_id` to the country table using ISO3 first, exact
-    current-country name second, then `demscore.country_aliases` for curated current-name and
-    CShapes historical matches; rows still unmatched are kept and summarized in
-    `demscore.dataset_value_unmapped_audit`, never silently deleted
+  - remaps `demscore.dataset_values.country_id` to the country table, running
+    `demscore.country_resolution_policy` first (`natural_earth`, then `cshapes`, then
+    `historical_registry`) and only then the source's own ISO3 and country name against
+    present-day countries. Policy goes first because it is a decision somebody wrote down
+    and an ISO3 that happens to equal a Natural Earth code is two code lists agreeing by
+    accident; when they disagree the decision has to win, or a policy row narrowing an
+    entity to part of its span would be quietly overtaken on the rest. An
+    `intentionally_unsupported` row then clears any `country_id` a later pass set, so a
+    refusal is enforced rather than merely hoped for. Rows still unmatched are kept and
+    summarized in `demscore.dataset_value_unmapped_audit`, never silently deleted, and
+    that table's `resolution_status` says whether the row is `intentionally_unsupported`
+    (a policy names it and gives a reason) or `unresolved` (nothing does).
+    `scripts/check_country_resolution.sh` fails setup on the second kind
    - precomputes hex meshes into `demscore.hex_mesh` for supported hex sizes
-   - precomputes `demscore.hex_borders`, one row per mesh per pair of neighbouring countries
-     (and one per country for the edges facing nothing), holding the hexagon edges between
-     them. Every other edge sits between two hexagons of the same country, can never separate
-     two colours, and is dropped. Dataset, variable and year do not enter into it, so the
-     render-time cost of an outline is a filter rather than a dissolve
+   - precomputes the outline candidates as two tables: `demscore.hex_border_edges`, one row
+     per hexagon edge that could ever separate two colours, and `demscore.hex_border_sides`,
+     one row per country with hexagons on that edge, carrying how many. Every other edge has
+     hexagons of one country on it only, can never separate two colours, and is dropped —
+     two thirds of them. It takes two tables rather than a `country_a`/`country_b` pair
+     because an edge can have more than two sides: displaced and `inset` cells overlap, and
+     the CShapes historical countries lay a second mesh over the current one (6 740 Soviet
+     Union cells over Russia and its neighbours at 50 km). Dataset, variable and year do not
+     enter into it, so the render-time cost of an outline is a filter rather than a dissolve
    - defines `demscore.hex_variable(...)` to join precomputed hex geometry with selected dataset values and compute quantile classes
 6. MapServer layer `hex_variable` calls `demscore.hex_variable(...)` dynamically using WMS params and applies bbox filtering inside the SQL subquery.
    Layer `hex_outline` draws the black perimeter around each *area* of one colour — a run of
    touching hexagons in the same class, so two neighbouring countries the legend paints the
-   same shade are one area — by keeping the `hex_borders` rows whose two sides fall in
-   different classes. A country absent from `country_scores` reads as a NULL class, so an area
-   that is not drawn is not outlined either. The client asks for it by naming both layers.
+   same shade are one area — by restricting `hex_border_sides` to the countries this request
+   renders and keeping the edges that then carry either a single hexagon (a perimeter, with
+   the background on the other side) or more than one class. A country absent from
+   `country_scores` drops out of the sides, so an area that is not drawn is not outlined
+   either. The client asks for it by naming both layers.
 7. `scripts/build_variable_coverage.sh` precomputes `webapp/config/variable_coverage.json`:
    - reads per-variable, per-year country counts once
-   - buckets them onto one shared year axis per dataset (~40 bars), so two rows in
-     the same list are read against the same scale
+   - buckets each variable across its own first-to-last year (~40 bars, one per year where
+     the span is shorter than that), so every strip fills its row. The row writes those two
+     years underneath the strip, which is what makes a scale nobody shares readable; bar
+     height is still normalized per dataset, so heights compare within a dataset and
+     positions compare nowhere
    - each bar is one digit `0`-`9`: `0` is no data, and `1`-`9` scale how much data
      sits in that window — missing years and thin country coverage both pull it down
-   - the variable list draws a strip under every row at once, so it cannot afford the
-     live per-year aggregate the map's own timeline runs for the one selected variable
+   - the variable list draws a strip under every row at once, so it cannot afford to
+     ask the database per row; the same file also sets the height of the main
+     timeline's read-ahead marks, so one variable reads as one shape in both places.
+     On the timeline a mark's height is that coverage and its fill is how much of
+     those years is in the tile cache -- one row, two readings
    - the same data backs the COVERAGE block at the foot of the variable hover card,
      which adds the axis years and an explanation the row itself has no room for
 8. The map UI sends WMS requests with `dataset`, `variable`, `year` and `hex_size`, naming
@@ -132,6 +177,11 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `scripts/extract_variable_metadata.py`: robust parser for codebook text blocks and variable metadata fields
 - `scripts/load_variable_metadata.sh`: PDF-to-DB metadata load pipeline for variable titles/citations/descriptions
 - `scripts/setup_mapserver_hex_service.sh`: full environment + geometry + SQL setup + smoke tests
+- `scripts/clear_map_tile_cache.sh`: empties the server-side WMS tile cache and reloads
+  nginx. The one place that command is written; `setup_mapserver_hex_service.sh` calls it
+  after rebuilding the mesh, `preload_mapcache_tiles.sh --clear` calls it before warming,
+  and `./deploy.sh clear-map-tile-cache` is the hand-run form. A preload on its own never
+  clears: it only requests tiles, and a URL the cache holds is served from the cache
 - `scripts/build_variable_coverage.sh`: precomputes the variable list's coverage strips
   into `webapp/config/variable_coverage.json` (run by the setup script; rerun it after
   any load that changes which years or countries a variable covers)
@@ -145,8 +195,21 @@ The system turns tabular democracy indicator data into a thematic global hex map
   adjacent class pair in greyscale and under simulated protanopia, deuteranopia and
   tritanopia. Plain `node`, no dependencies. Run it after any change to a colour, or to the
   interface colour tokens it also checks
+- `country_polygon_considerations.md`: what the country geometry is, where it is
+  approximate and which of those approximations matter — the per-entity register of
+  known inaccuracies, the V-Dem coding units that change territory mid-series, the
+  overlapping-entity cases that look like rendering faults, and the licence consequences.
+  Read it before quoting the map on a pre-1886 country
 - `ACCESSIBILITY.md`: what the accessibility work covers, the manual keyboard and
   screen-reader checklist to run before a release, and what is still missing
+- `scripts/check_country_resolution.sh`: reports source-versus-map coverage, lists the
+  entities this deployment intentionally does not draw, and **fails** if any source
+  observation is unmapped without a policy row saying why. Also runs regression assertions
+  over the cases that are easy to get wrong — Palestine, Zanzibar, Vietnam and the pre-1850
+  European states, each of which changes geometry source partway through its own series.
+  Run by the setup script, and safe to run on its own at any time
+- `sql/historical_geometry.sql`: the curated historical geometry registry and the
+  resolution policy. Runs before `mapserver_hex_setup.sql`, which reads both
 - `sql/mapserver_hex_setup.sql`: core DB objects and hex function
 - `mapserver/mapserver.map`: WMS config and style classes
 - `mapserver/README.md`: WMS parameter contract
@@ -181,13 +244,19 @@ The system turns tabular democracy indicator data into a thematic global hex map
   (identity + web-backend land basemap), `ne_50m_admin_0_map_units.geojson` (hex geometry),
   and `ne_50m_admin_0_tiny_countries.geojson` (point support for countries too small to
   read well as polygons). `CShapes-2.0.geojson` adds historical country geometry for
-  country-year observations that cannot honestly be drawn on current borders
+  country-year observations that cannot honestly be drawn on current borders;
+  `CShapes-Europe.geojson` extends that back to 1816 for Europe; and
+  `historical_basemaps/world_{1783,1800,1815}.geojson` covers what neither reaches.
+  `data/reference/README.md` is the licence and citation register — two of the four
+  sources carry conditions that reach the tiles rendered from them, so read it before
+  adding or removing one
 
 ## 5) Runtime Interfaces
 
 ### Service endpoints
 
-- Web app: `http://127.0.0.1:8090`
+- Web app: `http://127.0.0.1:8090` (port set by `DEMSCORE_ROUTER_PORT` in `.env`,
+  default `8090`)
 - MapServer WMS via router/cache gateway: `http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map`
 - Server-side tile caching: set `DEMSCORE_ENABLE_MAPCACHE=1` in `.env`; with `0`,
   the same route is a no-store pass-through for development
@@ -207,7 +276,17 @@ so an unknown dataset is a 400 rather than a silent fall back to `v_dem`:
 - `/api/map-data` — one row per country on the map (name, ISO3, value, class, no-data), for
   the accessible data table. It is a `LEFT JOIN` from the whole country table on purpose: a
   country with no value for this year is a reading of the data, and a table that quietly
-  omitted it would look complete while being wrong
+  omitted it would look complete while being wrong. Each row also carries
+  `historical`, `validFromYear`/`validToYear`, `geometrySource` and
+  `geometryConfidence`: a hexagon drawn on an 1815 snapshot and one drawn on a present-day
+  border are the same picture, and this is the only place a reader can be told which
+- `/api/source-coverage` — what the source measured for this variable-year against what the
+  map can draw of it. `sourceCountries`, `mappedCountries`, `unrepresentedCountries`,
+  `mappedByGeometryConfidence`, and `unrepresented[]` naming each entity with the reason
+  this deployment cannot represent it. It exists because the two routes above can only see
+  countries that have geometry, which makes "the source never measured this" and "this
+  deployment cannot draw it" indistinguishable — and those are opposite facts. Backed by
+  `demscore.source_coverage()`
 
 ### WMS parameter contract
 
@@ -271,20 +350,50 @@ Set cache toggle in `.env`:
 
 - Loader is the canonical ingest path: it recreates `demscore.variables` and `demscore.dataset_values` from CSV headers.
 - `demscore.dataset_values` is the normalized value layer. If dataset column names change, update loader extraction logic first.
-- `demscore.country_aliases` is the curated country crosswalk. Use it for explicit source-name
-  or source-code fixes such as REPDEM `Czechia -> CZE`, and for historical mappings into
-  CShapes `gwcode`s. Do not map historical countries onto successor states unless the product
-  requirement explicitly chooses that aggregation.
+- `demscore.country_resolution_policy` is the curated crosswalk, and it replaced
+  `demscore.country_aliases`. Use it for explicit source-name or source-code fixes such as
+  REPDEM `Czechia -> CZE`, for historical mappings into CShapes `gwcode`s, for entities the
+  curated registry covers, and — the case an alias table could not express — for entities
+  this deployment refuses to draw, which need a `reason` saying why. Do not map historical
+  countries onto successor states unless the product requirement explicitly chooses that
+  aggregation, and do not resolve two source coding units onto one country row:
+  `demscore.country_scores()` would average them together. V-Dem codes both a
+  pre-partition Vietnam and a northern one for 1945-1953, which is why the former is a
+  registry country of its own rather than an alias onto modern Vietnam.
+- `demscore.historical_country_geometries_src` is where historical polygons live. A row is
+  one entity for one year span, with its source, licence, citation, snapshot year (if it
+  came from one) and confidence grade. Grade honestly: `high` only for a period-aware
+  source used inside its own period, `medium` for such a polygon carried across years the
+  coding-unit history documents as unchanged, `low` for a snapshot or for a polygon known
+  to draw the wrong extent — and a `low` row must say in `notes` what it is getting wrong.
+  The table enforces both: a snapshot row cannot be graded above `low`, and a `low` row
+  cannot have empty notes.
 - `demscore.dataset_value_unmapped_audit` is rebuilt by map setup and is the required report
-  for source observations that still cannot be represented. A non-empty audit table is allowed
-  only when the remaining entities are understood and documented.
+  for source observations that still cannot be represented. Its `resolution_status` is
+  `intentionally_unsupported` or `unresolved`, and `scripts/check_country_resolution.sh`
+  fails setup on any `unresolved` row. A non-empty audit table is allowed only for entities
+  that have a policy row explaining the refusal.
+- **Adding a dataset, or taking a newer export of one, can introduce a source country
+  nothing covers.** Setup will fail rather than ship a map whose universe silently differs
+  from the source's; the check prints each entity with its years and value count, and the
+  fix is a registry entry plus a `historical_registry` policy row, or an
+  `intentionally_unsupported` row. Rerunning `scripts/build_variable_coverage.sh` after
+  that is still required, since the coverage strips are derived from the same values.
 - `demscore.variable_metadata` is the UI-facing dictionary layer (human titles, citations, descriptions, provenance).
 - `demscore.variable_metadata_raw` is a refreshable staging table for parsed codebook output.
 - `demscore.hex_mesh` stores precomputed geometry for `hex_size` values 20000..300000 (step 5000).
-- `demscore.hex_borders` is derived from `demscore.hex_mesh` and is rebuilt with it. It matches
-  the two sides of an edge by exact geometry, which holds because `ST_HexagonGrid` makes every
-  country's mesh part of one global grid; a change that gave countries their own grids would
-  silently leave every hexagon outlined on its own.
+- `demscore.hex_border_edges` and `demscore.hex_border_sides` are derived from
+  `demscore.hex_mesh` and are rebuilt with it. They match the sides of an edge by exact
+  geometry, which holds because `ST_HexagonGrid` makes every country's mesh part of one global
+  grid; a change that gave countries their own grids would silently leave every hexagon
+  outlined on its own.
+- **The outline layers must read `hex_count` from `hex_border_sides`, never from the hexagons a
+  request returns.** MapServer substitutes `!BOX!` with the extent of pixel *centres*, half a
+  pixel smaller than the tile on every side, so a query that decides "nothing on the other
+  side" from what its own box returned mistakes the rim of the box for the rim of the map and
+  strokes a dashed line along every tile seam. `ST_Expand(!BOX!, %hex_size%)` in those layers
+  is only so a border just outside the tile still lays its half of the stroke in the edge
+  pixels; nothing about which edges are drawn depends on it.
 - Everything spatial is EPSG:8857, Equal Earth. One hexagon is one real area anywhere on
   the map, which is the only reading under which a hexagon count means anything; Web
   Mercator scaled area by sec^2(latitude) and the mesh inherited it, so Russia carried
@@ -304,8 +413,21 @@ Set cache toggle in `.env`:
     Earth — because that surplus is the distortion being shown. The stops used to be
     doubled for Mercator to make the totals match, which only bought the matching number
     by drawing every Mercator cell twice as wide.
-  - **every country has at least one hexagon at every size**, and three passes in
-    `sql/mapserver_hex_setup.sql` are what make that true. A cell is kept when its centre
+  - **a historical country borrows a cell, it never takes one.** The dealing passes below
+    move cells between countries, which is right while the mesh is a partition among the
+    countries on the map at once. The historical rows are not part of that partition: they
+    are an overlay, drawn for the years they were in force and invisible otherwise, so a
+    cell one of them took would be gone from a present-day country in *every* year.
+    Germany fell from 11 cells to 6 at 100 km when the pre-unification states arrived, and
+    Ukraine had already lost four to the Soviet Union before that. The claim logic is
+    unchanged; only the eviction is conditional, on both sides of the transfer being
+    `natural_earth`. Two countries then hold the same geometry, which is what the Soviet
+    mesh lying over Russia has always been and which the border tables already allow for.
+  - **every country that carries data has at least one hexagon at every size**, and three
+    passes in `sql/mapserver_hex_setup.sql` are what make that true. (Four Natural Earth
+    dependencies under 100 km2 and in no dataset — Sint Maarten, Saint-Barthélemy,
+    Saint-Martin, Montserrat — miss some sizes, more of them in Mercator, whose ladder
+    starts twice as coarse. Nothing draws them, so nothing shows it.) A cell is kept when its centre
     falls inside the country; left at that, whether a small country is on the map is a
     lottery on the global grid's phase, and Denmark had one cell at 200k and none at
     100k. So a country that wins none is given the cells that hold the most of it (over
@@ -374,8 +496,12 @@ Set cache toggle in `.env`:
 - **Changing a colour inside an existing band invalidates every cached tile for it.** The
   tiles carry the colours, not just the geometry, and nothing in the URL changes when a colour
   does. Clear the server cache
-  (`podman exec demscore-mapcache sh -c 'rm -rf /var/cache/nginx/* && nginx -s reload'`) and
-  hard-reload the browser, whose service worker holds its own copy.
+  (`./deploy.sh clear-map-tile-cache`, or `./deploy.sh --preload N --clear` to empty and warm
+  it in one run) **and bump `WMS_TILE_CACHE` in `webapp/sw.js`**. A reload does not reach the service worker's copy:
+  Cache Storage is keyed by URL and is only shed when the cache's *name* changes, so a tile
+  whose contents changed under an unchanged URL stays a cache hit forever. The same applies to
+  any change that repaints a tile without changing its URL -- a colour, a class boundary, the
+  outline rule.
 - Adding a scheme means: a band in `palettes.js`, the generator, a `WHEN` arm in the four
   `DATA` strings in the mapfile, and the `palette` regex in the four `VALIDATION` blocks. The
   client needs nothing — the picker, the legend, the cookie and the spoken summary are all
@@ -389,6 +515,10 @@ Before merging changes:
 2. Confirm `GetCapabilities` and one `GetMap` request succeed.
 3. Verify the web UI can switch dataset, variable, year, and hex size.
 4. Validate SQL changes with at least one query for each dataset (`qog`, `repdem`, `v_dem`).
+4b. Run `./scripts/check_country_resolution.sh` if anything touched country matching,
+   the resolution policy, the historical registry or the reference geometry. It fails on
+   any source observation that lost its geometry, and its regression cases cover the
+   entities whose territory moves under them.
 5. Run `node scripts/build_hex_classes.mjs --check` and
    `node scripts/check_palette_contrast.mjs` if any colour moved.
 6. Run the keyboard pass in `ACCESSIBILITY.md` if any control, dialog or focus behaviour
@@ -399,6 +529,27 @@ Before merging changes:
 - Source CSV fields are imported as text in transient staging tables; numeric conversion is done during ingest into `demscore.dataset_values`.
 - Codebook PDFs are semi-structured; metadata extraction is heuristic by design. Keep parser stop markers and label handling conservative.
 - Country matching can miss rows if ISO/name values drift from Natural Earth naming.
+  Setup now fails rather than absorbing that silently — see
+  `scripts/check_country_resolution.sh`.
+- Eleven of the 67 historical country-periods rest on `low`-confidence outlines: world
+  snapshots asked to stand for a span of years, or a polygon drawn at the wrong extent
+  because no vendored source carries the right one. Mostly this is a difference the map
+  cannot express anyway -- six of the eleven are one hexagon at every size the app offers,
+  and Baden before 1816 is drawn five times too large and is one hexagon either way. Two
+  of them are not about precision but about territory: Two Sicilies before 1816 includes
+  Sicily, which V-Dem's unit did not, and that is 6 of its 17 hexagons at 50 km.
+  `country_polygon_considerations.md` has the measurements and the per-entity register.
+- Two of the four boundary sources are non-commercial or copyleft — see
+  `data/reference/README.md`. The hex meshes and the rendered tiles are derivatives of
+  them.
+- V-Dem's Republic of Vietnam (1802-1953, the whole country) and Vietnam (North Vietnam
+  from 1945) overlap for nine years, so both are drawn on the same ground for 1945-1953.
+  That is the same overlap CShapes already produces for the Soviet Union over Russia, and
+  it is in the source rather than in the mapping.
+- One source entity is intentionally undrawn: V-Dem's South Yemen before 1967, which codes
+  the city of Aden (192 km2) and later the western Federation of South Arabia. The only
+  available polygon is the whole People's Democratic Republic, some 287 000 km2.
+  OpenHistoricalMap carries dated Aden Colony relations under CC0 if this is picked up.
 - The two Natural Earth layers are joined on `adm0_a3` and currently agree exactly (177 each).
   A country present in `countries_src` but absent from the map units keeps its untrimmed
   outline rather than disappearing.
@@ -407,7 +558,11 @@ Before merging changes:
 - Precomputing `hex_mesh` across all supported sizes increases setup time and storage footprint.
 - Coverage strips are normalized against the busiest year in their own dataset, so bar
   heights compare rows within a dataset and mean nothing across datasets — RepDem's
-  fullest year reaches 32 countries where V-Dem's reaches 165.
+  fullest year reaches 33 countries where V-Dem's reaches 179 and QoG's 193. V-Dem's
+  figure moved from 165 when the historical registry made its pre-1886 states drawable,
+  which is the coverage strips going stale in exactly the way the note above them warns
+  about: they are derived from `country_id`, so anything that changes what maps changes
+  them.
 - Dynamic SQL surface is partially constrained by MapServer regex validation; keep validation strict.
 - `POSTGRES_PASSWORD` initialises the `demscore` role once, when the `pg_data` volume is
   created, and lives in the volume from then on; changing `.env` afterwards does not reach
@@ -424,6 +579,11 @@ Before merging changes:
   picture shows, and nothing enforces that the two stay in step. They are held together by
   both being read from `demscore.country_scores()`; a change that colours the map from
   anything else has to bring the summary with it.
+- **A rebuilt hex mesh invalidates every cached tile, and nothing in the URL says so.**
+  Same trap as a colour change: the tiles carry the geometry, not a reference to it, so a
+  setup run that moves a hexagon leaves the cache serving the old map. `setup_mapserver_hex_service.sh`
+  now clears the server cache when `DEMSCORE_ENABLE_MAPCACHE=1`; the browser's service
+  worker holds its own copy and needs a hard reload.
 - Each colour scheme has its own tile cache, because the scheme is in the request URL. That
   is what keeps them from serving each other's colours, but it also means the mapcache
   warm-up (`scripts/preload_mapcache_tiles.sh`) and the in-browser read-ahead cover one
@@ -446,6 +606,10 @@ Before merging changes:
 2. Add a small integration test script that validates map output for all three datasets.
 3. Consider materializing heavy intermediate results if response time degrades on larger datasets.
 4. Add data dictionary docs per dataset for easier variable onboarding.
+4b. Consume `/api/source-coverage` in the web client, so a country the source measured but
+   this deployment cannot draw is distinguishable from one the source never measured. That
+   is the part of the geometry metadata the picture genuinely cannot carry; the confidence
+   grade itself does not need surfacing -- see `country_polygon_considerations.md` section 2.
 5. Add an automated accessibility audit (Playwright driving the desktop and phone states,
    axe-core over each). It is the one item of the accessibility plan not done, purely
    because it needs a dependency install this repository has never had; the states worth

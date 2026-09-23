@@ -7,7 +7,7 @@ services:
       - mapcache
       - web-backend
     ports:
-      - "8090:80"
+      - "${DEMSCORE_ROUTER_PORT:-8090}:80"
     command:
       - sh
       - -lc

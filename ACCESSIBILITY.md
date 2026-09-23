@@ -93,7 +93,12 @@ Colour is still not the only channel, which matters most in the two diverging sc
   a close button, a focus moved into it and a focus given back — and a `tooltip` when it is
   shown by a hover.
 - The phone picker is a grouped list of buttons rather than a listbox it never implemented.
-- Coverage ranges are in every row's accessible description, not only in a `title`.
+- Coverage ranges are in every row's accessible description, not only in a `title`. The
+  coverage strips themselves — the one under each row, and the height of the timeline's
+  read-ahead marks — are `aria-hidden`: they carry no fact the row's description, the
+  slider's `aria-valuetext` and the map summary do not already say in words. The years
+  printed under a row's strip are `aria-hidden` for the same reason, and because the row
+  is a `<label>` wrapping a radio, where visible text would join the radio's name.
 - The loading spinner has a spoken counterpart, but only past 1.5s and never during autoplay.
 - `prefers-reduced-motion: reduce` stops the spinner, the boot placeholders and the preload
   fill.

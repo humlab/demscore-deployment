@@ -23,12 +23,30 @@ Requirements:
 
 This generates a `.env` (from `.env.example`) with a random `POSTGRES_PASSWORD`,
 starts all services, loads the datasets, and sets up the map-ready DB objects.
-The web app is then available at `http://127.0.0.1:8090`.
+The web app is then available at `http://127.0.0.1:8090` (the router's host
+port; change it with `DEMSCORE_ROUTER_PORT` in `.env`).
 
 Other commands: `./deploy.sh start`, `./deploy.sh stop`, `./deploy.sh status`.
 With map caching enabled and services running, `./deploy.sh --preload 2`
 preloads zoom levels 1 and 2 for every dataset/variable/year combination
 across all colour schemes.
+
+A preload only *asks* for tiles, so a tile the cache already holds is answered
+from the cache and never re-rendered. After anything that repaints a tile
+without changing its URL — a rebuilt hex mesh, a colour, a class boundary, the
+outline rule — the cache has to be emptied first, or the warm-up preserves the
+old map instead of replacing it:
+
+```bash
+./deploy.sh clear-map-tile-cache     # empty the server cache and reload nginx
+./deploy.sh --preload 2 --clear      # empty it, then warm it again
+```
+
+Both reach the server cache only. A reader's browser keeps its own copy behind
+the service worker, which is keyed by URL and shed only when the cache's *name*
+changes, so bump `WMS_TILE_CACHE` in `webapp/sw.js` for that — a reload alone
+will not do it. (`scripts/setup_mapserver_hex_service.sh` already clears the
+server cache itself when caching is enabled, since it rebuilds the mesh.)
 
 To enable server/browser WMS tile caching, set `DEMSCORE_ENABLE_MAPCACHE=1`
 in `.env` before starting. `DEMSCORE_MAPCACHE_MAX_SIZE` (default `100g`)
@@ -53,7 +71,16 @@ it's re-rendered from the database.
   `./deploy.sh --preload N` for a bounded warm-up of the first `N` zoom levels.
 - No automated test suite exists yet; `scripts/setup_mapserver_hex_service.sh`
   provides operational smoke tests (DB readiness, WMS `GetCapabilities` and
-  `GetMap`).
+  `GetMap`), and `scripts/check_country_resolution.sh` checks that every source
+  observation is either drawn on the map or explicitly refused. Setup fails on
+  a source country nothing covers, which is what a newer dataset export is most
+  likely to introduce.
+- Reference boundaries come from four sources, two of them non-commercial or
+  copyleft. `data/reference/README.md` is the licence and citation register;
+  read it before redistributing the database, the tiles or the rendered map.
+- `country_polygon_considerations.md` records what the country geometry is and
+  where it is approximate — worth reading before quoting the map on a country
+  that no longer exists.
 - `POSTGRES_PASSWORD` is only applied the first time the `pg_data` volume is
   created. Changing it in `.env` later requires `scripts/sync_db_password.sh`
   (run automatically by `./scripts/dev_up.sh`) to reconcile it.
