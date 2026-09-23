@@ -40,5 +40,13 @@ dist/
 build/
 
 todo.md
+discussion_points.md
+accessibility_action_plan.md
+country_polygon_considerations.md
+data_correctness_review.md
+map_projection_upgrade.md
+old_country_polygon_completion_problem_and_task.md
+topic_classification.wip.md
+topics_proposal.draft.json
 
 quadlet-deployment/
