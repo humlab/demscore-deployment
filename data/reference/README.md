@@ -51,15 +51,23 @@ instead of being dropped or painted across the larger 1967-1990 state polygon.
 **Natural Earth.** Made with Natural Earth. Free vector and raster map data at
 <https://naturalearthdata.com>. Public domain.
 
-**CShapes 2.0.** Schvitz, G., Girardin, L., Rüegger, S., Weidmann, N. B.,
-Cederman, L.-E., and Gleditsch, K. S. (2022). Mapping the International System,
-1886-2019: The CShapes 2.0 Dataset. *Journal of Conflict Resolution* 66(1):
-144-161. Licensed CC BY-NC-SA 4.0. <https://icr.ethz.ch/data/cshapes/>
+Both CShapes citations are the ones the distributor asks for on
+<https://icr.ethz.ch/data/cshapes/>, checked there rather than copied from a
+secondary source: an earlier version of this file had the CShapes-Europe author
+list wrong.
 
-**CShapes-Europe.** Cederman, L.-E., Girardin, L., Rüegger, S., Schvitz, G., and
-Weidmann, N. B. (2025). *Nationalism and the Transformation of the State*.
-Cambridge University Press. Licensed CC BY-NC-SA 4.0.
+**CShapes 2.0.** Schvitz, Guy, Seraina Rüegger, Luc Girardin, Lars-Erik
+Cederman, Nils Weidmann, and Kristian Skrede Gleditsch (2022). Mapping the
+International System, 1886-2019: The CShapes 2.0 Dataset. *Journal of Conflict
+Resolution* 66(1): 144-161. Licensed CC BY-NC-SA 4.0.
 <https://icr.ethz.ch/data/cshapes/>
+
+**CShapes-Europe.** Cederman, Lars-Erik, Luc Girardin, Carl Müller-Crepon, and
+Yannick Pengl (2025). *Nationalism and the Transformation of the State: Border
+Change and Political Violence in the Modern World*. Cambridge University Press.
+Licensed CC BY-NC-SA 4.0. The licence statement on the distributor's page covers
+CShapes as a whole, CShapes-Europe included; only the requested citation
+differs. <https://icr.ethz.ch/data/cshapes/>
 
 **Historical Basemaps.** Ourednik, A. (2021). Historical Basemaps.
 <https://doi.org/10.5281/zenodo.11212643>. Licensed GPL-3.0.
