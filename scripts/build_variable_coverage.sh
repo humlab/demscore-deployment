@@ -64,7 +64,7 @@ for dataset, variables in counts.items():
     year_min = min(y for years in variables.values() for y in years)
     year_max = max(y for years in variables.values() for y in years)
 
-    # Density is normalized against the busiest year anywhere in the dataset, so a
+    # Density is normalised against the busiest year anywhere in the dataset, so a
     # sample covering 38 countries reads as lighter than one covering 194 rather
     # than each variable's own busiest year being what full height means.
     dataset_max = max(c for years in variables.values() for c in years.values())

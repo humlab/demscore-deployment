@@ -15,7 +15,7 @@ Requirements:
 - `ogr2ogr` on the host `PATH`
 - `curl`
 - ~10 GB disk for the database and reference boundaries; see below for tile
-  cache disk behavior
+  cache disk behaviour
 
 ```bash
 ./deploy.sh install

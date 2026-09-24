@@ -135,7 +135,7 @@ def get_field(lines: List[str], label: str) -> Optional[str]:
             break
 
         s = candidate.strip()
-        # Skip obvious page artifacts.
+        # Skip obvious page artefacts.
         if s == "\x0c":
             continue
         if s.startswith("TOC"):
