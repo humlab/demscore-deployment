@@ -141,6 +141,22 @@ Tab from the address bar and do not touch the mouse.
 - [ ] Enter on **Data table** opens the dialog, traps focus, and Escape closes it and
       returns focus to the button. Enter on a column header sorts it, the header reports the
       direction, and focus stays on that header. No-data rows sort to the end either way.
+- [ ] Enter on **About** opens the dialog. It is one dialog covering both what the map is
+      and what it is made of; there is no second modal to reach the licences.
+- [ ] Inside it, every section heading is a disclosure reachable by Tab and operable with
+      Enter or Space, and each says how many sources or which licence it holds before it is
+      opened. *Indicator data*, *Map boundaries* and *Using this map* are **open** when the
+      dialog appears; only *Software and images* is closed.
+- [ ] Tab reaches **Sources & licences** inside the attribution line under the map — the
+      credit line is a tab stop, not a mouse target, because it is where the CC BY-NC-SA and
+      GPL-3.0 attribution is discharged. Enter opens the About dialog scrolled to *Map
+      boundaries*, traps focus, and Escape closes it and returns focus to that button.
+- [ ] In the data table, the **Sources & licences** button in the boundary footnote closes
+      the table and opens the About dialog at the same section — one modal at a time, never
+      two focus traps stacked. Escape then returns focus to the legend's **Data table**
+      button, not to a dialog that is no longer open.
+- [ ] The data table's **Boundary** column sorts, and a historical row reads its source with
+      the years that outline is claimed for.
 
 ### Keyboard, phone width (≤900px)
 
@@ -166,6 +182,12 @@ NVDA + Firefox, and VoiceOver + Safari where it is available.
 - [ ] A variable row reads as its title and dataset, with its coverage as a description —
       once, not twice.
 - [ ] The data table reads country by country with the country name as each row's header.
+- [ ] The attribution line under the map is read as part of the page, not skipped: it names
+      the boundary sources and their licences on **every** year, including present-day ones.
+- [ ] Each boundary entry reads its title and its licence. The per-source "Modified:"
+      sentence sits behind that entry's disclosure; the always-visible credit line under the
+      map is what carries the indication of modification unconditionally, so check that line
+      still ends "Modified." on every year.
 
 ### Colour
 

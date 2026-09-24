@@ -75,9 +75,21 @@ it's re-rendered from the database.
   observation is either drawn on the map or explicitly refused. Setup fails on
   a source country nothing covers, which is what a newer dataset export is most
   likely to introduce.
-- Reference boundaries come from four sources, two of them non-commercial or
-  copyleft. `data/reference/README.md` is the licence and citation register;
+- **This deployment is non-commercial, and has to be.** Two of the four boundary
+  sources are CC BY-NC-SA 4.0, which permits no commercial use, and the hex
+  meshes and rendered tiles are derivatives of them — so no advertising, no paid
+  access and no bundling into a commercial service, and anything offered onward
+  carries the same licence. See [LICENSE](LICENSE). A deployment that needs an
+  unencumbered map cannot simply drop a file: `sql/historical_geometry.sql`
+  would have to be reduced to the Natural Earth rows, losing every pre-1886
+  country. `data/reference/README.md` is the full licence and citation register;
   read it before redistributing the database, the tiles or the rendered map.
+- The credits the app shows are generated, not written:
+  `scripts/build_attribution.sh` reads which geometry is actually drawn out of
+  `demscore.countries`, joins it to the hand-maintained register in
+  `webapp/config/attribution_sources.json`, and **fails** on a boundary source
+  the register cannot name. Setup runs it, so a new source reaches the credits
+  or it does not ship.
 - `country_polygon_considerations.md` records what the country geometry is and
   where it is approximate — worth reading before quoting the map on a country
   that no longer exists.

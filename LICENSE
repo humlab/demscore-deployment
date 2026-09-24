@@ -1,0 +1,97 @@
+Demscore hex map — licensing
+============================
+
+This repository holds three kinds of thing, and they are not under the same
+terms. Which one applies depends on what is being reused, not on which
+directory it sits in.
+
+
+1. Source code — MIT
+--------------------
+
+Everything this project wrote: `scripts/`, `sql/`, `web-backend/`,
+`mapserver/`, `initdb/`, `router/`, `mapcache/`, `deploy/`, the compose and
+deployment files, and the web app's own source under `webapp/` (a submodule,
+github.com/humlab/demscore-web, which carries the same licence).
+
+Copyright (c) 2025 Demscore / Humlab, Umeå University
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The MIT grant covers the code as code. Running it against the boundary data
+vendored here produces output that section 2 governs, and the code does not
+license that output.
+
+
+2. Map output and derived boundary data — CC BY-NC-SA 4.0
+---------------------------------------------------------
+
+The hexagon meshes (`demscore.hex_mesh`, `demscore.hex_mesh_mercator`), the
+normalised country tables built from the vendored boundary sources
+(`demscore.countries`, `demscore.historical_country_geometries_src` and the
+border-edge tables derived from them), and the WMS tiles and map images
+rendered from any of these.
+
+These are adaptations of CShapes 2.0 and CShapes-Europe, which are licensed
+CC BY-NC-SA 4.0. ShareAlike carries: the adaptations are offered onward under
+the same licence.
+
+    https://creativecommons.org/licenses/by-nc-sa/4.0/
+
+In practice this means attribution (the sources are named in the app and in
+`data/reference/README.md`), non-commercial use only, and the same licence on
+anything derived further.
+
+**This deployment is non-commercial.** No advertising, no paid access, no
+bundling into a commercial service. That is the operating mode the boundary
+sources require, not a preference. A deployment that needs an unencumbered map
+would have to reduce `sql/historical_geometry.sql` to the Natural Earth rows and
+lose every pre-1886 country — dropping a file is not enough, because the
+CShapes-derived rows reach present-day years too (both Palestine units and
+Zanzibar are drawn in 2020).
+
+Some rendered views also contain polygons derived from historical-basemaps,
+which is GPL-3.0. Five entities, ten hexagons at the 100 km size: Bavaria,
+Hamburg, Hanover, Saxony and Tuscany. Its notice travels in the app's
+"Sources & licences" dialog and in `data/reference/README.md`.
+
+
+3. Vendored third-party data — each source's own licence
+--------------------------------------------------------
+
+Files under `data/` are not this project's to license. `data/reference/README.md`
+is the register: Natural Earth (public domain), CShapes 2.0 and CShapes-Europe
+(CC BY-NC-SA 4.0), historical-basemaps (GPL-3.0).
+
+The indicator datasets (V-Dem, QoG, REPDEM), their codebook PDFs under
+`data/Demscore_Module_Vars/` and `webapp/assets/codebooks/`, and the Demscore
+wordmark belong to their respective providers. Each dataset requires citation as
+a condition of use; the citations are in the app's "Sources & licences" dialog
+and in `webapp/config/attribution_sources.json`.
+
+
+Where the credits come from
+---------------------------
+
+The sources the app names are generated from the database rather than written by
+hand: `scripts/build_attribution.sh` reads which geometry is actually drawn out
+of `demscore.countries`, joins it to the register in
+`webapp/config/attribution_sources.json`, and fails the build on a boundary
+source it cannot name. A new source therefore reaches the credits, or it does
+not ship.

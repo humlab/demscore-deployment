@@ -434,6 +434,18 @@ async function getVariableCoverageConfig() {
   return readJsonConfig("variable_coverage.json", { datasets: {} });
 }
 
+// Built offline by scripts/build_attribution.sh from demscore.countries joined to
+// the hand-maintained register in webapp/config/attribution_sources.json. It is
+// what the always-visible credit line under the map and the "Sources & licences"
+// dialog are both drawn from, so the two cannot name different sources.
+//
+// The fallback is empty rather than a hard-coded line: the client carries its own
+// constant for the line (see MapController), because an attribution that depends
+// on a fetch succeeding is not an attribution.
+async function getAttributionConfig() {
+  return readJsonConfig("attribution.json", {});
+}
+
 // Curated cross-dataset topics for the variable list. Hand-maintained rather than
 // derived: the codebook section a variable sits under is dataset-scoped and, for
 // this selection, mostly one variable per section, so it seeds the mapping but
@@ -627,13 +639,14 @@ app.get("/api/basemap/land", asyncRoute(async (_req, res) => {
 }));
 
 app.get("/api/config", asyncRoute(async (_req, res) => {
-  const [variables, legendSemantics, variablePolarity, variableCoverage, variableTopics] =
+  const [variables, legendSemantics, variablePolarity, variableCoverage, variableTopics, attribution] =
     await Promise.all([
       getVariablesConfig(),
       getLegendSemanticsConfig(),
       getVariablePolarityConfig(),
       getVariableCoverageConfig(),
       getVariableTopicsConfig(),
+      getAttributionConfig(),
     ]);
 
   res.json({
@@ -642,6 +655,7 @@ app.get("/api/config", asyncRoute(async (_req, res) => {
     variablePolarity,
     variableCoverage,
     variableTopics,
+    attribution,
   });
 }));
 
@@ -694,6 +708,12 @@ app.get("/api/config/variable-topics", asyncRoute(async (_req, res) => {
   res
     .set("Cache-Control", "public, max-age=3600")
     .json(await getVariableTopicsConfig());
+}));
+
+app.get("/api/config/attribution", asyncRoute(async (_req, res) => {
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json(await getAttributionConfig());
 }));
 
 // The three parameters every map-state read shares, validated the same way the

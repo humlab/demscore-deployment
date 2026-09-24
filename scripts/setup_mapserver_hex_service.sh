@@ -223,6 +223,14 @@ GROUP BY dataset, variable, year;"
 echo "Precomputing variable coverage strips for the variable list..."
 "${ROOT_DIR}/scripts/build_variable_coverage.sh"
 
+# Every boundary source now on the map must be one the credits can name. This
+# fails on a geometry source with no entry in webapp/config/attribution_sources.json,
+# for the same reason the resolution check above fails on an unmapped country: a
+# source that reaches the tiles without reaching the attribution is a licence
+# breach, and the only moment anyone would notice is this one.
+echo "Rebuilding the sources and licences the map credits..."
+"${ROOT_DIR}/scripts/build_attribution.sh"
+
 echo "Validating WMS GetCapabilities..."
 curl -sS "http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&REQUEST=GetCapabilities" \
   | head -n 20
