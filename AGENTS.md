@@ -98,7 +98,7 @@ The system turns tabular democracy indicator data into a thematic global hex map
      "this one is not representable, and here is why", so the difference between a decision
      and an oversight was invisible
 5. `sql/mapserver_hex_setup.sql`:
-   - normalizes country geometry into `demscore.countries` (4326 + 8857), taking identity
+   - normalises country geometry into `demscore.countries` (4326 + 8857), taking identity
      from `countries_src` and geometry from the map units dissolved per `adm0_a3`, minus
      overseas units — one that carries its own ISO code while its sovereign is drawn as
      several units (French Guiana, Svalbard). Without this a country's hexagons land on
@@ -114,7 +114,7 @@ The system turns tabular democracy indicator data into a thematic global hex map
     entity to part of its span would be quietly overtaken on the rest. An
     `intentionally_unsupported` row then clears any `country_id` a later pass set, so a
     refusal is enforced rather than merely hoped for. Rows still unmatched are kept and
-    summarized in `demscore.dataset_value_unmapped_audit`, never silently deleted, and
+    summarised in `demscore.dataset_value_unmapped_audit`, never silently deleted, and
     that table's `resolution_status` says whether the row is `intentionally_unsupported`
     (a policy names it and gives a reason) or `unresolved` (nothing does).
     `scripts/check_country_resolution.sh` fails setup on the second kind
@@ -124,25 +124,24 @@ The system turns tabular democracy indicator data into a thematic global hex map
      one row per country with hexagons on that edge, carrying how many. Every other edge has
      hexagons of one country on it only, can never separate two colours, and is dropped —
      two thirds of them. It takes two tables rather than a `country_a`/`country_b` pair
-     because an edge can have more than two sides: displaced and `inset` cells overlap, and
+     because an edge can have more than two sides: displaced cells overlap, and
      the CShapes historical countries lay a second mesh over the current one (6 740 Soviet
      Union cells over Russia and its neighbours at 50 km). Dataset, variable and year do not
      enter into it, so the render-time cost of an outline is a filter rather than a dissolve
    - defines `demscore.hex_variable(...)` to join precomputed hex geometry with selected dataset values and compute quantile classes
 6. MapServer layer `hex_variable` calls `demscore.hex_variable(...)` dynamically using WMS params and applies bbox filtering inside the SQL subquery.
-   Layer `hex_outline` draws the black perimeter around each *area* of one colour — a run of
-   touching hexagons in the same class, so two neighbouring countries the legend paints the
-   same shade are one area — by restricting `hex_border_sides` to the countries this request
-   renders and keeping the edges that then carry either a single hexagon (a perimeter, with
-   the background on the other side) or more than one class. A country absent from
-   `country_scores` drops out of the sides, so an area that is not drawn is not outlined
-   either. The client asks for it by naming both layers.
+   Layer `hex_outline` draws the black stroke around each rendered colour area and around each
+   rendered country/coding-unit boundary. It restricts `hex_border_sides` to the countries this
+   request renders and keeps edges that then carry a single hexagon (a perimeter, with the
+   background on the other side), more than one country/coding unit, or more than one class. A
+   country absent from `country_scores` drops out of the sides, so an area that is not drawn is
+   not outlined either. The client asks for it by naming both layers.
 7. `scripts/build_variable_coverage.sh` precomputes `webapp/config/variable_coverage.json`:
    - reads per-variable, per-year country counts once
    - buckets each variable across its own first-to-last year (~40 bars, one per year where
      the span is shorter than that), so every strip fills its row. The row writes those two
      years underneath the strip, which is what makes a scale nobody shares readable; bar
-     height is still normalized per dataset, so heights compare within a dataset and
+     height is still normalised per dataset, so heights compare within a dataset and
      positions compare nowhere
    - each bar is one digit `0`-`9`: `0` is no data, and `1`-`9` scale how much data
      sits in that window — missing years and thin country coverage both pull it down
@@ -296,9 +295,9 @@ Accepted parameters for `hex_variable` and `hex_outline`:
 - `variable`: alphanumeric/underscore (`^[A-Za-z0-9_]+$`)
 - `year`: four digits
 - `hex_size`: 5-7 digit integer
-- `polarity`: `positive` | `negative` | `neutral`, read by the fill and inset layers only
-- `palette`: `default` | `indigo_amber` | `viridis` | `cividis`, read by the fill and inset
-  layers only. Which colour scheme paints the hexagons -- a reader's choice, not a deployment
+- `polarity`: `positive` | `negative` | `neutral`, read by the fill layers only
+- `palette`: `default` | `indigo_amber` | `viridis` | `cividis`, read by the fill layers
+  only. Which colour scheme paints the hexagons -- a reader's choice, not a deployment
   setting, since colour is the map's whole encoding and about one man in twelve cannot use
   the red-green channel the default leans on. Mechanically an offset on `class_idx` applied
   per scheme and polarity in the `DATA` query; see `mapserver/README.md` and
@@ -307,7 +306,7 @@ Accepted parameters for `hex_variable` and `hex_outline`:
 MapServer applies validation defaults; SQL additionally clamps:
 
 - year: `1500..2100`
-- hex size: `20000..300000` meters (Equal Earth metres, so the same real area anywhere)
+- hex size: `20000..300000` metres (Equal Earth metres, so the same real area anywhere)
 
 Advertised CRS: `EPSG:4326`, `EPSG:8857` and `EPSG:3857`, with WMS 1.1.1 (`SRS`, not `CRS`),
 which sidesteps 1.3.0's axis-order rules. Each layer narrows that to the one plane its mesh
@@ -349,7 +348,7 @@ Set cache toggle in `.env`:
 ### Data and schema changes
 
 - Loader is the canonical ingest path: it recreates `demscore.variables` and `demscore.dataset_values` from CSV headers.
-- `demscore.dataset_values` is the normalized value layer. If dataset column names change, update loader extraction logic first.
+- `demscore.dataset_values` is the normalised value layer. If dataset column names change, update loader extraction logic first.
 - `demscore.country_resolution_policy` is the curated crosswalk, and it replaced
   `demscore.country_aliases`. Use it for explicit source-name or source-code fixes such as
   REPDEM `Czechia -> CZE`, for historical mappings into CShapes `gwcode`s, for entities the
@@ -423,23 +422,32 @@ Set cache toggle in `.env`:
     unchanged; only the eviction is conditional, on both sides of the transfer being
     `natural_earth`. Two countries then hold the same geometry, which is what the Soviet
     mesh lying over Russia has always been and which the border tables already allow for.
-  - **every country that carries data has at least one hexagon at every size**, and three
-    passes in `sql/mapserver_hex_setup.sql` are what make that true. (Four Natural Earth
-    dependencies under 100 km2 and in no dataset — Sint Maarten, Saint-Barthélemy,
-    Saint-Martin, Montserrat — miss some sizes, more of them in Mercator, whose ladder
-    starts twice as coarse. Nothing draws them, so nothing shows it.) A cell is kept when its centre
+  - **every hexagon is one size, at every stop, always** — that is the rule the whole
+    mesh exists to keep, since a hexagon count only means something when one cell is one
+    fixed real area. Two passes in `sql/mapserver_hex_setup.sql` get as many countries
+    onto the map as that allows. A cell is kept when its centre
     falls inside the country; left at that, whether a small country is on the map is a
     lottery on the global grid's phase, and Denmark had one cell at 200k and none at
     100k. So a country that wins none is given the cells that hold the most of it (over
     the border on purpose, at most what its own area could fill, never a neighbour's last
     cell); then whatever is still empty takes a cell anyway, displacing a neighbour that
     holds less of it — which cannot ping-pong, because a cell only ever moves to a country
-    holding more of it; then the `inset` pass covers what no grid can seat. At the
-    coarsest sizes some regions hold more countries than cells covering them — the western
-    Balkans at 200k — so no dealing of cells can seat them all. Those get a hexagon from
-    the grid one notch finer, marked `inset`, overlapping the cell below and drawn by a
-    layer of its own on top of it (`hex_inset`; MapServer cannot be told to sort features
-    within a layer). 5 of 177 at 200k in Equal Earth, 4 in Mercator, none at 100k or below.
+    holding more of it.
+  - **a country the cells cannot seat is not drawn at that size.** At the coarsest sizes
+    some regions hold more countries than cells covering them — the western Balkans at
+    200k — so no dealing of cells can seat them all, and the leftovers wait for a finer
+    stop. Measured: 34 data-carrying coding units undrawn at 200k (23 distinct
+    names — Slovenia, Luxembourg, Montenegro, North Macedonia, Kosovo, San Marino,
+    Liechtenstein, three Caribbean states, the four Palestine units and eight
+    pre-unification German and Italian states), 5 at 100k (the Palestine units and
+    Saint Kitts and Nevis), none at 50k.
+    There used to be an `inset` pass instead, giving them a hexagon from the grid one
+    notch finer drawn on top of the cell below, by a layer of its own (`hex_inset`).
+    It was removed: it broke the one-size rule, and at 200k a quarter-area cell with a
+    perimeter of its own read as a rendering fault sitting inside a neighbour's hexagon
+    rather than as a country. The picture is the only place they are missing —
+    `demscore.country_scores()` is unchanged, so `/api/map-data`, `/api/class-breaks`,
+    the spoken summary and the accessible data table carry them at every zoom.
   - `demscore.countries.geom_3857` *is* clipped at `+/-85.05112878`, for the same reason
     `geom_8857` is not: that latitude is where Web Mercator's y runs off to infinity.
   - the size ladder is deliberately half the old Mercator one. A Mercator hexagon covered
@@ -462,13 +470,13 @@ Set cache toggle in `.env`:
     limit at ordinary window shapes -- see the projection notes in `webapp/AGENTS.md`.
 - Preserve join quality in `hex_variable`: ISO3 matching is primary; name matching is fallback.
 - `webapp/config/variable_coverage.json` is derived from `demscore.dataset_values`. It is a
-  build artifact, not a source of truth, and goes stale silently: rerun
+  build artefact, not a source of truth, and goes stale silently: rerun
   `scripts/build_variable_coverage.sh` after any reload.
 - If changing numeric parsing logic, test null/invalid values explicitly.
 
 ### Map rendering changes
 
-- Update `mapserver/mapserver.map` for style/class behavior.
+- Update `mapserver/mapserver.map` for style/class behaviour.
 - Keep WMS validation regex aligned with backend expectations.
 - If adding request params, update both:
   - MapServer `VALIDATION`
@@ -479,7 +487,7 @@ Set cache toggle in `.env`:
 
 - `webapp/config/variables.json` is the source of dataset/variable/year UI metadata.
 - `webapp/app.js` is intentionally framework-free; keep it dependency-light.
-- Preserve mobile layout behavior in `styles.css` (`@media (max-width: 900px)`).
+- Preserve mobile layout behaviour in `styles.css` (`@media (max-width: 900px)`).
 
 ### Colour changes
 
@@ -556,7 +564,7 @@ Before merging changes:
 - The land basemap deliberately keeps overseas territories: they are real land, they just
   must not inherit the sovereign's indicator value.
 - Precomputing `hex_mesh` across all supported sizes increases setup time and storage footprint.
-- Coverage strips are normalized against the busiest year in their own dataset, so bar
+- Coverage strips are normalised against the busiest year in their own dataset, so bar
   heights compare rows within a dataset and mean nothing across datasets — RepDem's
   fullest year reaches 33 countries where V-Dem's reaches 179 and QoG's 193. V-Dem's
   figure moved from 165 when the historical registry made its pre-1886 states drawable,

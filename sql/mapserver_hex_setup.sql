@@ -501,11 +501,6 @@ CREATE TABLE demscore.hex_mesh (
   hex_size_m INTEGER NOT NULL,
   hex_n INTEGER NOT NULL,
   id_key TEXT NOT NULL,
-  -- True for the half-size hexagons the inset pass hands to countries no grid
-  -- can seat. They overlap the cell they sit on, so they are the one thing in
-  -- here that is not part of the partition, and mapserver.map draws them as a
-  -- layer of their own on top of the cells rather than among them.
-  inset BOOLEAN NOT NULL DEFAULT false,
   geom geometry(Polygon, 8857) NOT NULL,
   PRIMARY KEY (country_id, hex_size_m, hex_n)
 );
@@ -878,7 +873,7 @@ BEGIN
 END;
 $$;
 
--- And the countries no grid can seat.
+-- And the countries no grid can seat, which are left unseated.
 --
 -- What is left is not a scheduling failure, it is arithmetic. At 200k the cells
 -- covering the western Balkans number fewer than the countries standing on
@@ -887,73 +882,39 @@ $$;
 -- the same in Mercator. No rule about who deserves which cell can fix a
 -- shortage of cells.
 --
--- They get a hexagon from the grid one notch finer instead -- half the edge, a
--- quarter of the area -- sitting where the country is, and drawn on top of the
--- cell it lands on. This is the one place the mesh stops being a partition, and
--- the layer draws big cells before small ones (SORTBY in mapserver.map) so the
--- inset is never the one underneath.
+-- They get nothing, and wait for a finer stop. There used to be an `inset` pass
+-- here: a hexagon from the grid one notch finer -- half the edge, a quarter of
+-- the area -- sitting where the country is and drawn on top of the cell it
+-- landed on, by a layer of its own. It is gone. Every hexagon on this map is
+-- one fixed real area, which is the only reading under which a hexagon count
+-- means anything, and a cell drawn at another size breaks the one rule the mesh
+-- exists to keep. It also does not read as a country: half the width of
+-- everything around it and with a perimeter of its own, an inset looked like a
+-- rendering fault sitting inside a neighbour's cell.
 --
--- It is drawn on top rather than cut out of the cell below because the cell
--- below is drawn for the country that owns it and the inset only for a country
--- that has a value: Palestine is in the mesh and in none of the datasets, so a
--- cut would leave a hexagon-shaped hole in Jordan for every variable and every
--- year. Overlaying costs nothing when the inset is missing.
+-- The cost is real and is accepted. 34 coding units that carry data draw nothing
+-- at 200k -- 23 distinct names: Slovenia, Luxembourg, Montenegro, North
+-- Macedonia, Kosovo, San Marino, Liechtenstein, three Caribbean states, the four
+-- Palestine units and eight pre-unification German and Italian states. At 100k
+-- five are still undrawn (the Palestine units and Saint Kitts and Nevis); at 50k
+-- none are. They are missing from the picture only: demscore.country_scores() is
+-- unchanged, so the spoken summary, the class breaks and the accessible data
+-- table still carry them at every zoom. The map is the one view that cannot hold
+-- them, and drawing them at another size was not holding them either.
 --
--- The outline table needs no special case either. An inset shares no edge with
--- anything, so all six of its edges read as mesh coastline and it is drawn with
--- a perimeter of its own, which is what makes it legible as a country rather
--- than a blemish on the cell under it.
---
--- `inset` marks these rows, because the fill layer has to exclude them and draw
--- them again afterwards: MapServer draws a layer's features in whatever order
--- the query hands them over, and there is no mapfile directive to sort them, so
--- the only way to be sure an inset lands on top of the cell it overlaps is for
--- it to be a separate layer, drawn after. See hex_inset in mapserver.map.
---
--- Sizes are filled from the finest up, so the grid an inset is taken from is
--- always complete by the time it is read; the insets at one size are distinct
--- cells of one finer grid, so they never overlap each other either.
-DO $$
-DECLARE
-  sz INT;
-  src INT;
-BEGIN
-  FOR sz IN SELECT generate_series(20000, 300000, 5000) ORDER BY 1 LOOP
-    src := GREATEST(20000, 5000 * floor(sz / 2.0 / 5000)::INT);
-    CONTINUE WHEN src >= sz;
+-- The mesh is therefore a strict partition again at every size: one cell, one
+-- country. The only overlaps left are the intended ones -- a historical
+-- country's cells lying over a present-day country's for the years it was in
+-- force -- and those are full-size cells of the same grid.
 
-    CREATE TEMP TABLE hex_inset AS
-    SELECT DISTINCT ON (c.id)
-      c.id AS country_id,
-      c.id_key,
-      hm.geom
-    FROM demscore.countries c
-    JOIN demscore.hex_mesh hm
-      ON hm.country_id = c.id AND hm.hex_size_m = src
-    WHERE NOT ST_IsEmpty(c.geom_8857)
-      AND NOT EXISTS (
-        SELECT 1 FROM demscore.hex_mesh h
-        WHERE h.country_id = c.id AND h.hex_size_m = sz
-      )
-    -- Of the country's finer cells, the one holding most of it.
-    ORDER BY c.id, ST_Area(ST_Intersection(hm.geom, c.geom_8857)) DESC;
-
-    INSERT INTO demscore.hex_mesh (country_id, hex_size_m, hex_n, id_key, inset, geom)
-    SELECT f.country_id, sz, 1, f.id_key, true, f.geom::geometry(Polygon, 8857)
-    FROM hex_inset f;
-
-    DROP TABLE hex_inset;
-  END LOOP;
-END;
-$$;
-
--- Where to draw the black outline that separates one colour from the next.
+-- Where to draw the black outline.
 --
--- The map's unit of colour is not the hexagon but the *area*: a run of
--- neighbouring hexagons that landed in the same quantile class, which is what a
--- reader sees as one shade. France and Spain sharing a shade of blue are one
--- area, and only its outer perimeter should be stroked -- not every hexagon
--- inside it.
+-- Same-country neighbouring hexagons that landed in the same quantile class are
+-- interior to one colour area and keep only their white hairlines. Different
+-- rendered country/coding-unit ids are still stroked even when they share a
+-- class, because historical overlays and split countries otherwise make real
+-- boundaries, and sometimes apparent coastlines, disappear when adjacent units
+-- happen to use the same shade.
 --
 -- Dissolving that perimeter at render time (ST_Union per class, per tile) would
 -- be both slow and wrong at tile seams, where the union cannot see the
@@ -967,21 +928,22 @@ $$;
 --
 -- It takes two tables because an edge can have more than two sides. Seating
 -- every country means cells that overlap -- one displaced onto a neighbour that
--- held less of it, the finer `inset` cells laid over the coarse ones -- and the
--- CShapes historical countries lay a second mesh over the current one, 6 740
--- cells of Soviet Union over Russia and its neighbours at 50 km alone. So
+-- held less of it -- and the CShapes historical countries lay a second mesh over
+-- the current one, 6 740 cells of Soviet Union over Russia and its neighbours at
+-- 50 km alone. So
 -- `hex_border_edges` holds the edge and its geometry, and `hex_border_sides`
 -- holds one row per country with hexagons on it. One row naming a country_a and
 -- a country_b cannot carry that: keeping only the lowest and highest country,
 -- as this table first did, dropped the third and with it 1 899 edges per mesh.
 --
 -- What the split buys is that the render-time question -- is there anything on
--- the other side of this edge, and is it a different colour? -- is answered from
--- the mesh as a whole rather than from the hexagons that happened to fall inside
--- the request box. Counting only the countries a request actually renders, an
--- edge is stroked when either
+-- the other side of this edge, is it a different country/coding unit, and is it
+-- a different colour? -- is answered from the mesh as a whole rather than from
+-- the hexagons that happened to fall inside the request box. Counting only the
+-- countries a request actually renders, an edge is stroked when either
 --   * exactly one hexagon sits on it, so it is a perimeter with the map's
---     background on the other side, or
+--     background on the other side,
+--   * more than one rendered country/coding unit sits on it, or
 --   * the hexagons on it carry more than one class.
 -- Both read their counts out of `hex_border_sides`, so a tile cannot mistake the
 -- edge of its own request box for the edge of the map. Deriving them from what

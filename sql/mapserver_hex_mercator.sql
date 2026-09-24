@@ -81,11 +81,6 @@ CREATE TABLE demscore.hex_mesh_mercator (
   hex_size_m INTEGER NOT NULL,
   hex_n INTEGER NOT NULL,
   id_key TEXT NOT NULL,
-  -- True for the half-size hexagons the inset pass hands to countries no grid
-  -- can seat. They overlap the cell they sit on, so they are the one thing in
-  -- here that is not part of the partition, and mapserver.map draws them as a
-  -- layer of their own on top of the cells rather than among them.
-  inset BOOLEAN NOT NULL DEFAULT false,
   geom geometry(Polygon, 3857) NOT NULL,
   PRIMARY KEY (country_id, hex_size_m, hex_n)
 );
@@ -467,74 +462,12 @@ BEGIN
 END;
 $$;
 
--- And the countries no grid can seat.
---
--- What is left is not a scheduling failure, it is arithmetic. At 200k the cells
--- covering the western Balkans number fewer than the countries standing on
--- them, so however the cells are dealt out, somebody gets none: Kosovo,
--- Montenegro, North Macedonia, Palestine and Slovenia in Equal Earth, four of
--- the same in Mercator. No rule about who deserves which cell can fix a
--- shortage of cells.
---
--- They get a hexagon from the grid one notch finer instead -- half the edge, a
--- quarter of the area -- sitting where the country is, and drawn on top of the
--- cell it lands on. This is the one place the mesh stops being a partition, and
--- the layer draws big cells before small ones (SORTBY in mapserver.map) so the
--- inset is never the one underneath.
---
--- It is drawn on top rather than cut out of the cell below because the cell
--- below is drawn for the country that owns it and the inset only for a country
--- that has a value: Palestine is in the mesh and in none of the datasets, so a
--- cut would leave a hexagon-shaped hole in Jordan for every variable and every
--- year. Overlaying costs nothing when the inset is missing.
---
--- The outline table needs no special case either. An inset shares no edge with
--- anything, so all six of its edges read as mesh coastline and it is drawn with
--- a perimeter of its own, which is what makes it legible as a country rather
--- than a blemish on the cell under it.
---
--- `inset` marks these rows, because the fill layer has to exclude them and draw
--- them again afterwards: MapServer draws a layer's features in whatever order
--- the query hands them over, and there is no mapfile directive to sort them, so
--- the only way to be sure an inset lands on top of the cell it overlaps is for
--- it to be a separate layer, drawn after. See hex_inset in mapserver.map.
---
--- Sizes are filled from the finest up, so the grid an inset is taken from is
--- always complete by the time it is read; the insets at one size are distinct
--- cells of one finer grid, so they never overlap each other either.
-DO $$
-DECLARE
-  sz INT;
-  src INT;
-BEGIN
-  FOR sz IN SELECT generate_series(40000, 600000, 10000) ORDER BY 1 LOOP
-    src := GREATEST(40000, 10000 * floor(sz / 2.0 / 10000)::INT);
-    CONTINUE WHEN src >= sz;
-
-    CREATE TEMP TABLE hex_inset_mercator AS
-    SELECT DISTINCT ON (c.id)
-      c.id AS country_id,
-      c.id_key,
-      hm.geom
-    FROM demscore.countries c
-    JOIN demscore.hex_mesh_mercator hm
-      ON hm.country_id = c.id AND hm.hex_size_m = src
-    WHERE NOT ST_IsEmpty(c.geom_3857)
-      AND NOT EXISTS (
-        SELECT 1 FROM demscore.hex_mesh_mercator h
-        WHERE h.country_id = c.id AND h.hex_size_m = sz
-      )
-    -- Of the country's finer cells, the one holding most of it.
-    ORDER BY c.id, ST_Area(ST_Intersection(hm.geom, c.geom_3857)) DESC;
-
-    INSERT INTO demscore.hex_mesh_mercator (country_id, hex_size_m, hex_n, id_key, inset, geom)
-    SELECT f.country_id, sz, 1, f.id_key, true, f.geom::geometry(Polygon, 3857)
-    FROM hex_inset_mercator f;
-
-    DROP TABLE hex_inset_mercator;
-  END LOOP;
-END;
-$$;
+-- And the countries no grid can seat, which are left unseated -- exactly as in
+-- the Equal Earth mesh. There used to be an `inset` pass here, giving them a
+-- hexagon from the grid one notch finer drawn on top of the cell it landed on;
+-- it is gone, for the reasons in the long note at the same place in
+-- sql/mapserver_hex_setup.sql. Every hexagon is one size, at every stop, and a
+-- country the cells cannot seat waits for a finer one.
 
 -- The edges that can ever separate one colour from the next, exactly as
 -- demscore.hex_border_edges and demscore.hex_border_sides are built for the

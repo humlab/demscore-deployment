@@ -175,7 +175,7 @@ case "$PROJECTION" in
     WORLD_HALF_X=17243959.06221695
     WORLD_HALF_Y=8392927.598466456
     WORLD_SRS="EPSG:8857"
-    LAYER_NAMES="hex_variable,hex_inset,hex_outline"
+    LAYER_NAMES="hex_variable,hex_outline"
     # The coarsest stop in the web app's ladder -- see HEX_ZOOM_THRESHOLDS in
     # webapp/src/core/projection.js. Warming any other size warms tiles the app
     # does not ask for at the world view.
@@ -185,7 +185,7 @@ case "$PROJECTION" in
     WORLD_HALF_X=20037508.342789244
     WORLD_HALF_Y=20037508.342789244
     WORLD_SRS="EPSG:3857"
-    LAYER_NAMES="hex_variable_mercator,hex_inset_mercator,hex_outline_mercator"
+    LAYER_NAMES="hex_variable_mercator,hex_outline_mercator"
     # The same stop as Equal Earth, deliberately: both projections count in the
     # same resolution ladder, so an equal size is an equal grain on screen --
     # see hexResolutionStops in webapp/src/core/projection.js.
