@@ -174,6 +174,10 @@ WITH expected(dataset, source_name, year, want_country, want_geometry_source) AS
   -- southern state after it.
   ('v_dem', 'Republic of Vietnam',       1900, 'Vietnam (pre-partition)',       'natural_earth_50m'),
   ('v_dem', 'Republic of Vietnam',       1960, 'Vietnam, Republic of',          'cshapes_2.0'),
+  -- Yemen/YEM is the North Yemen coding unit until unification, not the modern
+  -- state outline that would overlap South Yemen.
+  ('v_dem', 'Yemen',                     1970, 'Yemen (Arab Republic of Yemen)', 'cshapes_2.0'),
+  ('v_dem', 'Yemen',                     1991, 'Yemen',                         'natural_earth_50m'),
   -- Zanzibar, before CShapes begins and after the union with Tanganyika.
   ('v_dem', 'Zanzibar',                  1860, 'Zanzibar',                      'cshapes_2.0_extended'),
   ('v_dem', 'Zanzibar',                  1900, 'Zanzibar',                      'cshapes_2.0'),
@@ -195,8 +199,9 @@ WITH expected(dataset, source_name, year, want_country, want_geometry_source) AS
   ('v_dem', 'Two Sicilies',              1840, 'Two Sicilies',                  'cshapes_europe'),
   ('v_dem', 'Piedmont-Sardinia',         1840, 'Piedmont-Sardinia',             'cshapes_europe'),
   ('v_dem', 'Würtemberg',                1871, 'Württemberg',                   'cshapes_europe_extended'),
-  -- The one refusal, and the years on either side of it that are drawn.
-  ('v_dem', 'South Yemen',               1950, NULL,                            'intentionally_unsupported'),
+  -- South Yemen before statehood is a low-confidence Aden marker; statehood
+  -- years use the CShapes People's Democratic Republic polygon.
+  ('v_dem', 'South Yemen',               1950, 'South Yemen (Aden approximation)', 'demscore_custom_aden_approx'),
   ('v_dem', 'South Yemen',               1980, 'Yemen, People''s Republic of',  'cshapes_2.0')
 ), actual AS (
   SELECT

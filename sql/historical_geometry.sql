@@ -38,6 +38,9 @@ BEGIN
   IF to_regclass('demscore.historical_basemaps_src') IS NULL THEN
     RAISE EXCEPTION 'Missing table demscore.historical_basemaps_src. Run scripts/setup_mapserver_hex_service.sh to import the historical-basemaps snapshots.';
   END IF;
+  IF to_regclass('demscore.custom_historical_geometries_src') IS NULL THEN
+    RAISE EXCEPTION 'Missing table demscore.custom_historical_geometries_src. Run scripts/setup_mapserver_hex_service.sh to import custom historical approximations.';
+  END IF;
   IF to_regclass('demscore.countries_src') IS NULL THEN
     RAISE EXCEPTION 'Missing table demscore.countries_src. Run scripts/setup_mapserver_hex_service.sh to import Natural Earth countries.';
   END IF;
@@ -440,6 +443,39 @@ FROM demscore.countries_src src
 WHERE upper(NULLIF(NULLIF(src.iso_a3_eh, ''), '-99')) = 'VNM'
 LIMIT 1;
 
+-- 1f. Project-local approximate marker for V-Dem's South Yemen coding unit
+-- before statehood.
+--
+-- V-Dem carries South Yemen/YMD from 1900, but through 1963 that coding unit is
+-- Aden and its immediate surroundings, and from 1963 to 1966 the Federation of
+-- South Arabia rather than the later People's Democratic Republic. The
+-- deployment does not vendor a real historical boundary for either. This row is
+-- intentionally only a low-confidence map marker: a small square centred near
+-- modern Aden so values draw in the right locality instead of being dropped or
+-- painted across the much larger 1967-1990 state polygon.
+INSERT INTO demscore.historical_country_geometries_src
+  (registry_key, source_dataset, source_license, source_url, source_citation,
+   source_snapshot_year, source_name, normalized_name,
+   valid_from_year, valid_to_year, confidence, notes, geom)
+SELECT
+  src.registry_key,
+  src.source_dataset,
+  src.source_license,
+  src.source_url,
+  src.source_citation,
+  NULL::INTEGER,
+  src.source_name,
+  src.normalized_name,
+  src.valid_from_year::INTEGER,
+  src.valid_to_year::INTEGER,
+  src.confidence,
+  src.notes,
+  ST_Multi(ST_CollectionExtract(ST_MakeValid(src.geom), 3))::geometry(MultiPolygon, 4326)
+FROM demscore.custom_historical_geometries_src src
+WHERE src.registry_key = 'v_dem_south_yemen_aden_approx'
+  AND src.geom IS NOT NULL
+  AND NOT ST_IsEmpty(ST_CollectionExtract(ST_MakeValid(src.geom), 3));
+
 CREATE INDEX historical_country_geometries_key_idx
   ON demscore.historical_country_geometries_src (registry_key, valid_from_year, valid_to_year);
 CREATE INDEX historical_country_geometries_geom_gix
@@ -522,6 +558,7 @@ VALUES
   ('v_dem', 'ZZB', 'Zanzibar',                   1890, 1964, 'cshapes', NULL, NULL,  511, NULL, NULL, 'Zanzibar, Gleditsch-Ward 511'),
   ('v_dem', 'VDR', 'Republic of Vietnam',        1954, 1975, 'cshapes', NULL, NULL,  817, NULL, NULL, 'Republic of Vietnam, Gleditsch-Ward 817'),
   ('v_dem', 'YMD', 'South Yemen',                1967, 1990, 'cshapes', NULL, NULL,  680, NULL, NULL, 'Yemen, People''s Republic of, Gleditsch-Ward 680'),
+  ('v_dem', 'YEM', 'Yemen',                       1918, 1989, 'cshapes', NULL, NULL,  678, NULL, NULL, 'Yemen Arab Republic / North Yemen, Gleditsch-Ward 678'),
   ('v_dem', 'PSE', 'Palestine/West Bank',        1948, 1967, 'cshapes', NULL, NULL, 6631, NULL, NULL, 'West Bank, Gleditsch-Ward 6631'),
   ('v_dem', 'PSG', 'Palestine/Gaza',             1948, 1967, 'cshapes', NULL, NULL, 6511, NULL, NULL, 'Gaza, Gleditsch-Ward 6511'),
   ('v_dem', 'PSB', 'Palestine/British Mandate',  1920, 1948, 'cshapes', NULL, NULL,  665, NULL, NULL, 'Palestine, Gleditsch-Ward 665'),
@@ -540,6 +577,8 @@ VALUES
    'Occupied Enemy Territory Administration, before CShapes 2.0 begins the mandate'),
   ('v_dem', 'VDR', 'Republic of Vietnam',       1802, 1953, 'historical_registry', NULL, NULL, NULL, 'v_dem_vietnam_pre_partition', NULL,
    'The whole of Vietnam before the 1954 partition, not the southern state CShapes 2.0 carries from 1954'),
+  ('v_dem', 'YMD', 'South Yemen',                NULL, 1966, 'historical_registry', NULL, NULL, NULL, 'v_dem_south_yemen_aden_approx', NULL,
+   'Low-confidence local marker near Aden for V-Dem South Yemen/YMD before the 1967 state polygon is valid'),
 
   -- The pre-unification German and Italian states. One policy row each: the
   -- registry holds the period changes.
@@ -561,12 +600,7 @@ VALUES
   ('v_dem', 'SXN', 'Saxony',                NULL, NULL, 'historical_registry', NULL, NULL, NULL, 'v_dem_saxony',                NULL, NULL),
   ('v_dem', 'TSC', 'Tuscany',               NULL, NULL, 'historical_registry', NULL, NULL, NULL, 'v_dem_tuscany',               NULL, NULL),
   ('v_dem', 'TWS', 'Two Sicilies',          NULL, NULL, 'historical_registry', NULL, NULL, NULL, 'v_dem_two_sicilies',          NULL, NULL),
-  ('v_dem', 'WRG', 'Würtemberg',            NULL, NULL, 'historical_registry', NULL, NULL, NULL, 'v_dem_wurttemberg',           NULL, NULL),
-
-  -- The one entity in the source that this deployment refuses to draw.
-  ('v_dem', 'YMD', 'South Yemen', NULL, 1966, 'intentionally_unsupported', NULL, NULL, NULL, NULL,
-   'V-Dem codes only the city of Aden and its immediate surroundings until 1963, and the Federation of South Arabia without the eastern Protectorate of South Arabia from 1963 to 1967. No boundary source vendored here carries either outline. The only available polygon is the People''s Democratic Republic of Yemen that CShapes 2.0 supplies from 1967, which is about 287 000 km2 against Aden Colony''s 192 km2, so drawing it would put a value for one city across the whole of southern Arabia.',
-   'OpenHistoricalMap carries dated Aden Colony relations under CC0 and is the obvious source if this is ever picked up.');
+  ('v_dem', 'WRG', 'Würtemberg',            NULL, NULL, 'historical_registry', NULL, NULL, NULL, 'v_dem_wurttemberg',           NULL, NULL);
 
 CREATE INDEX country_resolution_policy_dataset_idx
   ON demscore.country_resolution_policy (dataset);

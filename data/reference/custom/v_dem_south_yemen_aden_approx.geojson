@@ -1,0 +1,34 @@
+{
+  "type": "FeatureCollection",
+  "name": "v_dem_south_yemen_aden_approx",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "registry_key": "v_dem_south_yemen_aden_approx",
+        "source_dataset": "demscore_custom_aden_approx",
+        "source_license": "Project-local approximation",
+        "source_url": "data/reference/custom/v_dem_south_yemen_aden_approx.geojson",
+        "source_citation": "Demscore project-local approximation: 14 km square centred near modern Aden, Yemen, for V-Dem South Yemen/YMD pre-1967 map placement.",
+        "source_name": "Aden approximate marker",
+        "normalized_name": "South Yemen (Aden approximation)",
+        "valid_from_year": 1900,
+        "valid_to_year": 1966,
+        "confidence": "low",
+        "notes": "Approximate marker polygon, not a historical boundary. V-Dem's South Yemen/YMD coding unit refers to Aden and its immediate surroundings through 1963, then to the Federation of South Arabia through 1966. This 14 km square is centred near modern Aden so pre-1967 values draw as one low-confidence local marker rather than using the much larger 1967-1990 South Yemen polygon."
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [44.9542, 12.7226],
+            [45.0832, 12.7226],
+            [45.0832, 12.8484],
+            [44.9542, 12.8484],
+            [44.9542, 12.7226]
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -1,8 +1,9 @@
 # Reference geometry
 
-Everything the map is drawn on. Each file is vendored verbatim from upstream
-and imported by `scripts/setup_mapserver_hex_service.sh`, which downloads
-anything missing.
+Everything the map is drawn on. Upstream files are vendored verbatim and
+imported by `scripts/setup_mapserver_hex_service.sh`, which downloads anything
+missing. Files under `custom/` are project-local approximations and are marked
+as such in the registry.
 
 | File | Role | Licence |
 | --- | --- | --- |
@@ -14,6 +15,7 @@ anything missing.
 | `historical_basemaps/world_1783.geojson` | World snapshot, 1783 | GPL-3.0 |
 | `historical_basemaps/world_1800.geojson` | World snapshot, 1800 | GPL-3.0 |
 | `historical_basemaps/world_1815.geojson` | World snapshot, 1815 | GPL-3.0 |
+| `custom/v_dem_south_yemen_aden_approx.geojson` | Project-local low-confidence Aden marker for V-Dem South Yemen/YMD before 1967 | Project-local approximation |
 
 ## Why three historical sources
 
@@ -37,6 +39,12 @@ to stand for a span of them. `demscore.historical_country_geometries_src`
 carries the source, licence, citation, year span and confidence of every polygon
 individually, and `/api/source-coverage` and `/api/map-data` pass the confidence
 through to the client.
+
+The `custom/` directory is different from the upstream files above: it contains
+project-local approximations rather than vendored source data. The South Yemen
+file is a small square centred near modern Aden. It is marked `low` confidence
+and is used only so V-Dem's pre-1967 South Yemen/YMD values draw near Aden
+instead of being dropped or painted across the larger 1967-1990 state polygon.
 
 ## Attribution
 

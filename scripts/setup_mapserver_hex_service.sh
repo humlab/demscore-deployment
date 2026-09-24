@@ -35,6 +35,9 @@ CSHAPES_EUROPE_URL="https://icr.ethz.ch/data/cshapes/CShapes-Europe.geojson"
 HISTORICAL_BASEMAPS_DIR="${ROOT_DIR}/data/reference/historical_basemaps"
 HISTORICAL_BASEMAPS_YEARS=(1783 1800 1815)
 HISTORICAL_BASEMAPS_URL_BASE="https://raw.githubusercontent.com/aourednik/historical-basemaps/master/geojson"
+# Project-local approximate geometries. These are deliberately separate from
+# upstream reference files, which are vendored verbatim.
+CUSTOM_HISTORICAL_FILE="${ROOT_DIR}/data/reference/custom/v_dem_south_yemen_aden_approx.geojson"
 PG_HOST="${PG_HOST:-127.0.0.1}"
 PG_PORT="${PG_PORT:-5532}"
 PG_DB="${PG_DB:-demscore}"
@@ -69,6 +72,11 @@ for snapshot_year in "${HISTORICAL_BASEMAPS_YEARS[@]}"; do
       "${HISTORICAL_BASEMAPS_URL_BASE}/world_${snapshot_year}.geojson"
   fi
 done
+
+if [[ ! -f "$CUSTOM_HISTORICAL_FILE" ]]; then
+  echo "Missing required custom historical geometry file: ${CUSTOM_HISTORICAL_FILE}" >&2
+  exit 1
+fi
 
 echo "Starting services for local dev..."
 "${ROOT_DIR}/scripts/dev_up.sh"
@@ -158,10 +166,21 @@ for snapshot_year in "${HISTORICAL_BASEMAPS_YEARS[@]}"; do
     -sql "SELECT ${snapshot_year} AS snapshot_year, \"NAME\" AS name, \"SUBJECTO\" AS subject_to, \"PARTOF\" AS part_of, \"BORDERPRECISION\" AS border_precision FROM world_${snapshot_year}"
 done
 
+echo "Importing custom historical approximations into PostGIS..."
+podman compose --profile setup run --rm gdal ogr2ogr \
+  -f PostgreSQL \
+  "PG:host=db port=5432 dbname=${PG_DB} user=${PG_USER}" \
+  /data/custom/v_dem_south_yemen_aden_approx.geojson \
+  -nln demscore.custom_historical_geometries_src \
+  -overwrite \
+  -nlt PROMOTE_TO_MULTI \
+  -lco GEOMETRY_NAME=geom \
+  -lco FID=feature_id
+
 echo "Building the curated historical geometry registry and the resolution policy..."
 podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f - < "${ROOT_DIR}/sql/historical_geometry.sql"
 
-echo "Creating normalized map tables, precomputed hex meshes, and map function..."
+echo "Creating normalised map tables, precomputed hex meshes, and map function..."
 echo "This step expects dataset values to be loaded first via scripts/load_demscore_module_vars.sh"
 podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f - < "${ROOT_DIR}/sql/mapserver_hex_setup.sql"
 
