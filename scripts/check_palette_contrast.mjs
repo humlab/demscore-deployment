@@ -295,14 +295,29 @@ function checkNoData(rampName, colors, noData) {
   }
 }
 
-// The legend's own text is white on the navy dock; the app tokens it is set in
-// are checked here so a palette edit cannot quietly drop text below 4.5:1.
+// Text the app sets in its own tokens rather than in a palette, checked here so
+// an edit to either cannot quietly drop something below 4.5:1.
+//
+// The first three used to be white on the navy legend dock. That dock is gone --
+// the legend's scale moved into the map dashboard and its words up under the
+// timeline caption -- so they are checked against the surfaces they are
+// actually drawn on now: the dashboard's pale slate and the timeline overlay's
+// white pill.
 function checkTextTokens() {
   heading("interface text contrast");
   const pairs = [
-    ["legend title/labels", "#ffffff", "#1d3c4f"],
-    ["legend subtitle (84% white on navy)", "#d6dde1", "#1d3c4f"],
-    ["legend note (74% white on navy)", "#c4cdd3", "#1d3c4f"],
+    ["legend end labels (on the dashboard)", "#475569", "#f1f5f9"],
+    ["legend title (accent, on the timeline pill)", "#1d3c4f", "#ffffff"],
+    ["legend note (muted, on the timeline pill)", "#6b6664", "#ffffff"],
+    // The table view's movement arrows. Same lightness by design, so neither
+    // may lean on being the darker one; both have to stand on white alone.
+    ["table view: moved up", "#2f7d62", "#ffffff"],
+    ["table view: moved down", "#b4553a", "#ffffff"],
+    // A followed row is tinted with its mark's ink, and the row's own text goes
+    // on being read on top of it. The hovered tint is the strongest mix any of
+    // the six reaches (30%), and the blue is the darkest of the six, so this is
+    // the worst case the marks can put under a row.
+    ["table view: text on a followed row", "#3b3838", "#c1cbd2"],
     ["body text on white", "#3b3838", "#ffffff"],
     ["muted text on white", "#6b6664", "#ffffff"],
     ["muted text on panel surface", "#6b6664", "#f5f5f5"],

@@ -21,14 +21,16 @@ and the text in step; there is no assertion that they agree.
 |---|---|---|
 | `#mapSummary` | dataset, variable, year, projection, how the colours run, how much of the world carries a value, and each class's span | never — a `region`, read on demand |
 | `#mapAnnouncer` | one sentence naming the variable and its coverage | once the selection has stopped moving; never during autoplay |
-| `#mapDataDialog` | every country on the map as a sortable row, plus a CSV of the same | on request, from the **Data table** button in the legend |
+| the **table view** | every country on the map as a sortable row, plus a CSV of the same | on request, from **Table** in the View switch |
 
 The summary is deliberately not a live region. It is several sentences plus seven list items
 and it is rewritten on every frame of an animation; a polite region carrying that would talk
 over everything else on the page. The announcer is the live one and holds a sentence.
 
-The data table is the whole country table, not only the countries with values. "Somalia is
-not shown for 2020" is as much a reading of the data as a number is.
+The table view is the whole country table, not only the countries with values. "Somalia is
+not shown for 2020" is as much a reading of the data as a number is. It replaced a modal of
+the same rows opened from a **Data table** button on the legend; a view that stays on while
+the year moves is what a modal could not be.
 
 ### Colour
 
@@ -74,21 +76,22 @@ lightest shade sat ΔE 17 from the cream, so "no value" read as "bottom of the s
 Colour is still not the only channel, which matters most in the two diverging schemes:
 
 - the equal-colour **area outlines** are on by default, and their toggle is on screen beside
-  the projection radios rather than behind the Shift+D developer extras, because a control
-  that carries this much is not a developer affordance;
+  the View switch and the colour picker rather than behind the Shift+D developer extras,
+  because a control that carries this much is not a developer affordance;
 - every legend swatch's accessible name carries its class number, value span and country
   count in full, so it does not depend on the hover card;
-- the data table gives the exact value and class per country.
+- the table view gives the exact value and class per country.
 
 ### Everything else
 
 - Focus: `:focus-visible` at the top of `styles.css` is the floor. The transparent range
-  input, the OpenLayers zoom buttons, the playback row, the projection radios and the legend
+  input, the OpenLayers zoom buttons, the playback row, the View switch and the legend
   swatches all draw a visible ring now; the range input's ring is drawn on the marker,
   because the input itself is invisible and covers the whole timeline.
-- Tab order follows the visible layout: sidebar → timeline (top of the map) → map controls →
-  legend (foot of the map). `#timeline-overlay` sits before `<main id="map">` in the source
-  for that reason, though it is painted over it.
+- Tab order follows the visible layout: sidebar → timeline (top of the map) → the map's own
+  controls → the dashboard at the foot of it, which holds the View switch, the colour
+  picker, the outline toggle and the legend. `#timeline-overlay` sits before
+  `<main id="map">` in the source for that reason, though it is painted over it.
 - The variable info card is a non-modal `dialog` when it is opened by a click — with a name,
   a close button, a focus moved into it and a focus given back — and a `tooltip` when it is
   shown by a hover.
@@ -113,8 +116,11 @@ Tab from the address bar and do not touch the mouse.
 
 - [ ] Every stop shows a focus ring you can find without looking for it.
 - [ ] The order runs: search box → topic chips → dataset chips → variable list → Animate →
-      speed − / + → year slider → variable info → zoom + / − → attribution → projection →
-      outline toggle → **Data table** → the seven legend swatches.
+      speed − / + → year slider → variable info → zoom + / − → attribution → **View**
+      (one stop) → the seven legend swatches → **Colours** (one stop) → outline toggle.
+      The legend and the picker are both inside the Colours panel, the middle of the three
+      in the dashboard, with the legend above the picker — so the order is the visible
+      layout, left to right and then top to bottom.
 - [ ] Type in the search box; the list narrows and the summary under the chips updates.
       Escape empties the box and restores the full list.
 - [ ] Space on a topic chip and on a dataset chip toggles each; both stay announced as
@@ -131,16 +137,34 @@ Tab from the address bar and do not touch the mouse.
 - [ ] Enter on Animate starts and stops it; the button's own name changes with it, and the
       years going past are **not** announced one by one.
 - [ ] Enter on the speed buttons changes the multiplier and the change is announced once.
-- [ ] Arrow keys move between the projection radios and the map redraws.
+- [ ] Arrow keys move between the three **View** options and each one takes effect: the two
+      projections redraw the map, **Table** replaces it. The group is one tab stop, the
+      arrows wrap at both ends, and picking a projection while the table is on screen sets
+      it *and* brings the map back.
 - [ ] The *Colours* picker is reachable, operable from the keyboard alone, and announces
       itself by its visible "Colours" label. Each of the four repaints the hexagons and the
       legend bar together, and the legend note describes the scheme actually on screen.
+- [ ] **Each scheme announces its name.** The name is not painted on the button any more —
+      the four buttons are swatch strips, and the strips are `aria-hidden` — so the name is
+      a `visually-hidden` span inside each button and the tooltip carries it too. A button
+      that reads as "button" rather than as "Viridis" means that span has been removed.
 - [ ] Space on the outline toggle removes and restores the black class boundaries.
 - [ ] Each legend swatch announces its class number, its value span and its country count
       without the hover card being involved.
-- [ ] Enter on **Data table** opens the dialog, traps focus, and Escape closes it and
-      returns focus to the button. Enter on a column header sorts it, the header reports the
+- [ ] In the table view, Enter on a column header sorts it, the header reports the
       direction, and focus stays on that header. No-data rows sort to the end either way.
+- [ ] The table's rows are **one** tab stop, not 245. Arrow Up/Down move between them,
+      Home/End reach the ends, Enter follows the row the focus is on, and Escape clears
+      every mark. A followed row reads its name followed by "followed, blue" — the
+      highlight is not the only way that state is carried, and the colour is named
+      because it is what tells one mark from another.
+- [ ] **Deselect all (n)** appears in the head with the first mark and carries the count.
+      Enter on it clears every mark and moves focus to the rows, not to the body — the
+      button removes itself, and focus left on a hidden element is focus lost.
+- [ ] Step a year with a row focused and the focus stays on that row. The FLIP pass takes
+      every row out of the document for the length of one statement, which blurs whatever
+      was focused — `renderRows` notes it and puts it back, and this is the check that it
+      still does.
 - [ ] Enter on **About** opens the dialog. It is one dialog covering both what the map is
       and what it is made of; there is no second modal to reach the licences.
 - [ ] Inside it, every section heading is a disclosure reachable by Tab and operable with
@@ -151,12 +175,14 @@ Tab from the address bar and do not touch the mouse.
       credit line is a tab stop, not a mouse target, because it is where the CC BY-NC-SA and
       GPL-3.0 attribution is discharged. Enter opens the About dialog scrolled to *Map
       boundaries*, traps focus, and Escape closes it and returns focus to that button.
-- [ ] In the data table, the **Sources & licences** button in the boundary footnote closes
-      the table and opens the About dialog at the same section — one modal at a time, never
-      two focus traps stacked. Escape then returns focus to the legend's **Data table**
-      button, not to a dialog that is no longer open.
-- [ ] The data table's **Boundary** column sorts, and a historical row reads its source with
+- [ ] The table view's **Boundary** column sorts, and a historical row reads its source with
       the years that outline is claimed for.
+- [ ] The **±** column reads as words, not as a shape: "Up 3 places from 2018", "Same
+      position as 2018", "Not in the 2018 table". Its header announces "Change in position
+      since the previous year" rather than "plus or minus".
+- [ ] Up and down are told apart with the colour off. The two inks are at the same
+      lightness on purpose — they are indistinguishable in greyscale and to the commonest
+      colour blindness — so the triangle's direction is what has to carry it.
 
 ### Keyboard, phone width (≤900px)
 
@@ -181,7 +207,7 @@ NVDA + Firefox, and VoiceOver + Safari where it is available.
 - [ ] Starting an animation does not produce one per year.
 - [ ] A variable row reads as its title and dataset, with its coverage as a description —
       once, not twice.
-- [ ] The data table reads country by country with the country name as each row's header.
+- [ ] The table view reads country by country with the country name as each row's header.
 - [ ] The attribution line under the map is read as part of the page, not skipped: it names
       the boundary sources and their licences on **every** year, including present-day ones.
 - [ ] Each boundary entry reads its title and its licence. The per-source "Modified:"
@@ -215,10 +241,10 @@ The states worth auditing, when it is added:
 2. the variable list with a topic chip and a search term applied
 3. the variable info card open
 4. a legend swatch focused
-5. the data table dialog open, and again after sorting
+5. the table view on, and again after sorting
 6. the phone picker open
-7. each of the four colour schemes (the legend bar's contrast against the dock changes with
-   it, and nothing else does)
+7. each of the four colour schemes (the legend bar's contrast against the dashboard changes
+   with it, and nothing else does)
 
 Two things axe cannot answer, and which stay manual: whether the text equivalent of the map
 actually says what the map shows, and whether the ramps are usable. The first has no check
