@@ -171,6 +171,10 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `scripts/load_demscore_module_vars.sh`: CSV-to-table loader
 - `scripts/dev_up.sh`: starts core services and conditionally includes `mapcache` based on `.env`,
   then calls `sync_db_password.sh`
+- `scripts/build_webapp.sh`: builds `webapp/dist` (webpack) inside a throwaway `node:20-alpine`
+  container, so a host needs podman and not Node. Run by `dev_up.sh` before nginx starts, and
+  the one step any change under `webapp/` needs before it is served: the `web` container
+  serves `dist`, not the source
 - `scripts/sync_db_password.sh`: `ALTER ROLE` over the trusted unix socket so the `demscore`
   role's password matches `POSTGRES_PASSWORD` in `.env`
 - `scripts/extract_variable_metadata.py`: robust parser for codebook text blocks and variable metadata fields
