@@ -30,6 +30,8 @@ else
   echo "Starting services with WMS tile caching disabled..."
 fi
 
+"${ROOT_DIR}/scripts/build_webapp.sh"
+
 # Remove any stopped containers that would block recreation (e.g. stale named containers).
 podman compose rm -f "${services[@]}" 2>/dev/null || true
 

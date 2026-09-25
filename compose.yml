@@ -88,7 +88,8 @@ services:
       - mapserver
       - web-backend
     volumes:
-      - ./webapp:/usr/share/nginx/html:ro
+      - ./webapp/dist:/usr/share/nginx/html:ro
+      - ./webapp/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     restart: unless-stopped
 
   mapcache:

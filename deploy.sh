@@ -24,6 +24,8 @@ usage() {
   echo "  clear-map-tile-cache"
   echo "            Empty the server-side WMS tile cache and reload nginx"
   echo ""
+  echo "The install/start commands build webapp/dist before starting nginx."
+  echo ""
   echo "Shortcuts:"
   echo "  --preload N  Same as: preload N"
   exit 1
