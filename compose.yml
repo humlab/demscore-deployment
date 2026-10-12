@@ -47,7 +47,7 @@ services:
         condition: service_healthy
     environment:
       MS_MAPFILE: /etc/mapserver/mapserver.map
-      MS_DEBUGLEVEL: "2"
+      MS_DEBUGLEVEL: "0"
       MS_ERRORFILE: stderr
       MIN_PROCESSES: 8
       MAX_PROCESSES: 16
