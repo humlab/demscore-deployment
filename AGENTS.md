@@ -224,6 +224,11 @@ The system turns tabular democracy indicator data into a thematic global hex map
   known inaccuracies, the V-Dem coding units that change territory mid-series, the
   overlapping-entity cases that look like rendering faults, and the licence consequences.
   Read it before quoting the map on a pre-1886 country
+- `webapp/src/controllers/MapExportController.js`: **Save** in the map dashboard -- the map as
+  a PNG or as an MP4/WebM video of a span of years, with the Demscore and InfraVis logos and the
+  credits drawn into every frame. Downloads are the one place the map leaves the site without
+  the page's credit line, so the frame carries the boundary line, the map's CC BY-NC-SA 4.0
+  licence and the site address itself; see `webapp/AGENTS.md`
 - `ACCESSIBILITY.md`: what the accessibility work covers, the manual keyboard and
   screen-reader checklist to run before a release, and what is still missing
 - `scripts/check_country_resolution.sh`: reports source-versus-map coverage, lists the
