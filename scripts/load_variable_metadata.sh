@@ -68,7 +68,7 @@ python3 "${ROOT_DIR}/scripts/extract_variable_metadata.py" \
   --input "${vdem_txt}::${ROOT_DIR}/data/Demscore_Module_Vars/V-Dem/codebook.pdf"
 
 echo "Copying parsed metadata into DB container..."
-podman cp "$raw_csv" demscore-postgis:/tmp/variable_metadata_raw.csv
+podman compose cp "$raw_csv" db:/tmp/variable_metadata_raw.csv
 
 echo "Loading variable metadata into PostgreSQL..."
 podman compose exec -T db psql -U demscore -d demscore -v ON_ERROR_STOP=1 -f - <<'SQL'

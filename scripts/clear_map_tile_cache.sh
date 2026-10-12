@@ -58,7 +58,7 @@ fi
 # The cache lives in the mapcache_data volume, reachable only through the
 # container, so a stopped stack cannot be cleared from here. Say which case this
 # is rather than exiting quietly on a cache that is still full.
-if ! podman container exists demscore-mapcache 2>/dev/null; then
+if ! podman container exists "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null; then
   echo "The mapcache container does not exist, so there is no server tile cache to clear." >&2
   echo "If tiles are still held in the mapcache_data volume, start services with ./scripts/dev_up.sh and run this again." >&2
   exit 1
@@ -70,5 +70,5 @@ if ! podman compose ps --format '{{.Service}}\t{{.State}}' 2>/dev/null | awk -F'
 fi
 
 say "Clearing the server-side WMS tile cache..."
-podman exec demscore-mapcache sh -c 'rm -rf /var/cache/nginx/* && nginx -s reload'
+podman exec "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" sh -c 'rm -rf /var/cache/nginx/* && nginx -s reload'
 say "Cleared. Browsers keep their own copy: hard-reload the page, or bump WMS_TILE_CACHE in webapp/sw.js."

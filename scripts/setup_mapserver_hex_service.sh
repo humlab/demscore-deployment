@@ -39,7 +39,7 @@ HISTORICAL_BASEMAPS_URL_BASE="https://raw.githubusercontent.com/aourednik/histor
 # upstream reference files, which are vendored verbatim.
 CUSTOM_HISTORICAL_FILE="${ROOT_DIR}/data/reference/custom/v_dem_south_yemen_aden_approx.geojson"
 PG_HOST="${PG_HOST:-127.0.0.1}"
-PG_PORT="${PG_PORT:-5532}"
+PG_PORT="${PG_PORT:-${DEMSCORE_DB_PORT:-5532}}"
 PG_DB="${PG_DB:-demscore}"
 PG_USER="${PG_USER:-demscore}"
 
@@ -196,7 +196,7 @@ podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f -
 # the colour notes in AGENTS.md); it is just that here the hexagons move rather
 # than their fill. Browsers hold their own copy behind the service worker, so a
 # reader who was on the page needs a hard reload as well.
-if [[ "${DEMSCORE_ENABLE_MAPCACHE:-0}" == "1" ]] && podman container exists demscore-mapcache 2>/dev/null; then
+if [[ "${DEMSCORE_ENABLE_MAPCACHE:-0}" == "1" ]] && podman container exists "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null; then
   echo "Clearing the WMS tile cache, which still holds the previous geometry..."
   "${ROOT_DIR}/scripts/clear_map_tile_cache.sh" --quiet
 fi
