@@ -303,7 +303,7 @@
     NAME "41"
     EXPRESSION ([class_idx] = 41)
     STYLE
-      COLOR 0 0 4
+      COLOR 210 237 201
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -313,7 +313,7 @@
     NAME "42"
     EXPRESSION ([class_idx] = 42)
     STYLE
-      COLOR 75 17 119
+      COLOR 165 217 157
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -323,7 +323,7 @@
     NAME "43"
     EXPRESSION ([class_idx] = 43)
     STYLE
-      COLOR 124 35 134
+      COLOR 116 196 118
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -333,7 +333,7 @@
     NAME "44"
     EXPRESSION ([class_idx] = 44)
     STYLE
-      COLOR 183 55 121
+      COLOR 65 171 93
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -343,7 +343,7 @@
     NAME "45"
     EXPRESSION ([class_idx] = 45)
     STYLE
-      COLOR 237 121 83
+      COLOR 35 139 69
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -353,7 +353,7 @@
     NAME "46"
     EXPRESSION ([class_idx] = 46)
     STYLE
-      COLOR 251 186 114
+      COLOR 11 107 47
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -363,7 +363,7 @@
     NAME "47"
     EXPRESSION ([class_idx] = 47)
     STYLE
-      COLOR 252 253 191
+      COLOR 0 68 27
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -374,7 +374,7 @@
     NAME "51"
     EXPRESSION ([class_idx] = 51)
     STYLE
-      COLOR 43 42 112
+      COLOR 249 205 210
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -384,7 +384,7 @@
     NAME "52"
     EXPRESSION ([class_idx] = 52)
     STYLE
-      COLOR 74 84 168
+      COLOR 240 156 176
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -394,7 +394,7 @@
     NAME "53"
     EXPRESSION ([class_idx] = 53)
     STYLE
-      COLOR 120 137 192
+      COLOR 219 110 152
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -404,7 +404,7 @@
     NAME "54"
     EXPRESSION ([class_idx] = 54)
     STYLE
-      COLOR 174 182 201
+      COLOR 185 71 143
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -414,7 +414,7 @@
     NAME "55"
     EXPRESSION ([class_idx] = 55)
     STYLE
-      COLOR 215 194 145
+      COLOR 142 42 134
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -424,7 +424,7 @@
     NAME "56"
     EXPRESSION ([class_idx] = 56)
     STYLE
-      COLOR 237 170 69
+      COLOR 101 26 110
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END
@@ -434,7 +434,18 @@
     NAME "57"
     EXPRESSION ([class_idx] = 57)
     STYLE
-      COLOR 244 223 106
+      COLOR 46 8 64
+      OUTLINECOLOR 255 255 255
+      WIDTH 0.25
+    END
+  END
+
+# class_idx 99 -- no data (every scheme, every polarity)
+  CLASS
+    NAME "99"
+    EXPRESSION ([class_idx] = 99)
+    STYLE
+      COLOR 128 128 128
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END

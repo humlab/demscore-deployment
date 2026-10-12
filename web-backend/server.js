@@ -750,6 +750,45 @@ app.get("/api/class-breaks", asyncRoute(async (req, res) => {
     .json({ ...params, ...breaks });
 }));
 
+// How many countries carry a value in each year of one variable, for the
+// timeline: the hover card over a year says it, and the bars are drawn from it
+// one year each. Counted exactly as scripts/build_variable_coverage.sh counts
+// for the list strips -- distinct *mapped* countries -- so a bar on the timeline
+// and the strip under the variable's row are the same reading.
+//
+// Per variable and fetched when the variable changes, rather than folded into
+// /api/config/variable-coverage: every variable's per-year counts would about
+// triple a config payload every page load pays for, to serve the one variable
+// on screen.
+app.get("/api/year-counts", asyncRoute(async (req, res) => {
+  const dataset = typeof req.query.dataset === "string" ? req.query.dataset.toLowerCase() : "";
+  const variable = typeof req.query.variable === "string" ? req.query.variable : "";
+  if (!DATASET_META[dataset] || !VARIABLE_KEY_PATTERN.test(variable)) {
+    res.status(400).json({
+      error: "bad_request",
+      message: "dataset and variable query parameters are required and must be valid",
+    });
+    return;
+  }
+
+  const result = await pool.query(
+    `SELECT dv.year::INT AS year, count(DISTINCT dv.country_id)::INT AS countries
+     FROM demscore.variables v
+     JOIN demscore.dataset_values dv ON dv.variable_id = v.id
+     WHERE v.dataset = $1
+       AND v.variable = $2
+       AND dv.country_id IS NOT NULL
+     GROUP BY dv.year
+     ORDER BY dv.year;`,
+    [dataset, variable],
+  );
+  const counts = {};
+  for (const row of result.rows) counts[row.year] = row.countries;
+  res
+    .set("Cache-Control", "public, max-age=3600")
+    .json({ dataset, variable, counts });
+}));
+
 // How much of what the source measured this map is able to show. Same
 // dataset/variable/year triple as the WMS request and the two routes above.
 app.get("/api/source-coverage", asyncRoute(async (req, res) => {

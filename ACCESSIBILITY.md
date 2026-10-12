@@ -37,14 +37,18 @@ the year moves is what a modal could not be.
 **The reader picks the scheme.** Which colours work is not one question with one answer —
 about one man in twelve cannot use the red-green channel, a diverging ramp always has two
 classes that print as the same grey, and a projector flattens saturation — so *Colours* in
-the bottom-left map controls offers four, and the choice is kept in a cookie.
+the bottom-left map controls offers two, and the choice is kept in a cookie.
 
 | scheme | kind | what it is for |
 |---|---|---|
-| **Default** | diverging | Blue to red. Today's map: colour carries *which end is bad*, via `polarity`. |
-| **Indigo–amber** | diverging | Keeps that same reading, but separates roughly half again as far under simulated red-green deficiency (worst adjacent pair ΔE 18.1 against the default's 12.8). |
-| **Viridis** | sequential | One ramp for everything, dark purple to light green, always low to high. Monotonic in lightness, so it survives greyscale and a projector too. |
-| **Cividis** | sequential | One ramp for everything, dark blue to yellow. Built so protan and deutan viewers see very nearly what everyone else does. |
+| **Brown – Blue** (`indigo_amber`) | diverging | The default. Colour carries *which end is bad*, via `polarity`, and it separates roughly half again as far as Blue-Red under simulated red-green deficiency (worst adjacent pair ΔE 18.1 against 12.8). |
+| **Red – Blue** (`default`) | diverging | The same reading in blue to red. It was the default until the client asked for one without the red end's connotations. |
+
+**Withdrawn:** Viridis and Cividis, the two sequential schemes, were taken out of the picker
+at the client's request. They were the only schemes monotonic in lightness -- the ones for a
+reader who cannot use hue at all, for greyscale print and for a washed-out projector -- and
+nothing offered now covers that case. Both are `offered: false` in `palettes.js` and still
+served, so offering them again is one flag each. The paragraph below is kept for that day.
 
 The two sequential schemes cannot encode valence — one ramp, no second end to put anything
 at — so they run low-to-high always and ignore `polarity`. That is a real loss and it is the
@@ -115,16 +119,18 @@ There is no automated accessibility check (see the gap below), so this list is t
 Tab from the address bar and do not touch the mouse.
 
 - [ ] Every stop shows a focus ring you can find without looking for it.
-- [ ] The order runs: search box → topic chips → dataset chips → variable list → Animate →
-      speed − / + → year slider → variable info → zoom + / − → attribution → **View**
-      (one stop) → the seven legend swatches → **Colours** (one stop) → outline toggle.
-      The legend and the picker are both inside the Colours panel, the middle of the three
-      in the dashboard, with the legend above the picker — so the order is the visible
-      layout, left to right and then top to bottom.
+- [ ] The order runs: About → hide side panel → search box → topic chips → dataset chips →
+      variable list → play → speed → year slider → hide timeline → zoom + / − →
+      attribution → map only → **View** (one stop) → the seven legend swatches →
+      **Colours** → outline switch → hide map controls. The map dashboard is one row, so the
+      order is the visible layout, left to right.
 - [ ] Type in the search box; the list narrows and the summary under the chips updates.
       Escape empties the box and restores the full list.
 - [ ] Space on a topic chip and on a dataset chip toggles each; both stay announced as
       pressed. Toggling both off restores the list.
+- [ ] With a topic on, a dataset chip that has nothing under it is faded and its
+      description says why ("No variables under the selected topics…"). Space on it still
+      works: it clears the topics and turns the dataset on. Same the other way round.
 - [ ] The variable list is one tab stop. Arrow keys move through it, across dataset
       boundaries, and each row announces its title, its dataset and its coverage range.
       Selecting a row changes the map.
@@ -134,20 +140,29 @@ Tab from the address bar and do not touch the mouse.
 - [ ] On the year slider, Left/Right move the year and the announcement says how far it
       actually moved — a variable with gaps snaps, and says "nearest year with data".
       Home/End reach the ends.
-- [ ] Enter on Animate starts and stops it; the button's own name changes with it, and the
-      years going past are **not** announced one by one.
-- [ ] Enter on the speed buttons changes the multiplier and the change is announced once.
-- [ ] Arrow keys move between the three **View** options and each one takes effect: the two
-      projections redraw the map, **Table** replaces it. The group is one tab stop, the
-      arrows wrap at both ends, and picking a projection while the table is on screen sets
-      it *and* brings the map back.
-- [ ] The *Colours* picker is reachable, operable from the keyboard alone, and announces
-      itself by its visible "Colours" label. Each of the four repaints the hexagons and the
-      legend bar together, and the legend note describes the scheme actually on screen.
-- [ ] **Each scheme announces its name.** The name is not painted on the button any more —
-      the four buttons are swatch strips, and the strips are `aria-hidden` — so the name is
-      a `visually-hidden` span inside each button and the tooltip carries it too. A button
-      that reads as "button" rather than as "Viridis" means that span has been removed.
+- [ ] Enter on the play button starts and stops it; it is an icon, so its name ("Play
+      timeline" / "Pause timeline") is what is announced, and it changes with the state.
+      The years going past are **not** announced one by one.
+- [ ] The speed button is announced with its value in words ("Animation speed: 4 years per
+      second"), not as "4×". Enter, Space or an arrow opens the list of speeds and focus goes
+      into it; Up/Down/Home/End move, each speed read as years per second and as selected
+      or not; Enter picks one, closes the list and puts focus back on the button; Escape
+      closes it without picking (and must not also leave map-only).
+- [ ] Arrow keys move between the two **View** options and each one takes effect: **Map**
+      draws the map, **Table** replaces it. The group is one tab stop and the arrows wrap.
+- [ ] Each hide button (side panel, timeline, map controls) puts its panel away, is
+      announced as expanded/collapsed, and its name says what pressing it will do next.
+      Tabbing into a collapsed side panel or timeline brings it into view; tabbing out lets
+      it go again. The map controls fold to the legend in the bottom-left corner, with the
+      button that unfolds them beside it.
+- [ ] "Show only the map" hides the panels and leaves the map, itself and the credit line;
+      Enter on it again, or Escape, brings everything back.
+- [ ] The *Colours* button announces "Colours" and the scheme on screen ("Colours Brown –
+      Blue"). Enter, Space or an arrow opens the list and focus goes into it; Up/Down move
+      through the schemes, each announced by name and as selected or not; Enter picks one,
+      closes the list and puts focus back on the button; Escape closes it without picking
+      (and must not also leave map-only). Each scheme repaints the hexagons and the legend
+      bar together, and the legend note describes the scheme actually on screen.
 - [ ] Space on the outline toggle removes and restores the black class boundaries.
 - [ ] Each legend swatch announces its class number, its value span and its country count
       without the hover card being involved.
@@ -243,7 +258,7 @@ The states worth auditing, when it is added:
 4. a legend swatch focused
 5. the table view on, and again after sorting
 6. the phone picker open
-7. each of the four colour schemes (the legend bar's contrast against the dashboard changes
+7. each of the offered colour schemes (the legend bar's contrast against the dashboard changes
    with it, and nothing else does)
 
 Two things axe cannot answer, and which stay manual: whether the text equivalent of the map

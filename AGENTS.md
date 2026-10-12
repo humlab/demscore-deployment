@@ -128,14 +128,27 @@ The system turns tabular democracy indicator data into a thematic global hex map
      the CShapes historical countries lay a second mesh over the current one (6 740 Soviet
      Union cells over Russia and its neighbours at 50 km). Dataset, variable and year do not
      enter into it, so the render-time cost of an outline is a filter rather than a dissolve
+   - precomputes `demscore.hex_mesh_overlaps`: every cell one country holds that another
+     holds too, by exact geometry. Present-day countries never share a cell with each other,
+     so every row has a historical unit on one side. It is what lets the no-data hexagons
+     (below) stay out from under a historical unit drawn on the same ground
    - defines `demscore.hex_variable(...)` to join precomputed hex geometry with selected dataset values and compute quantile classes
 6. MapServer layer `hex_variable` calls `demscore.hex_variable(...)` dynamically using WMS params and applies bbox filtering inside the SQL subquery.
    Layer `hex_outline` draws the black stroke around each rendered colour area and around each
    rendered country/coding-unit boundary. It restricts `hex_border_sides` to the countries this
    request renders and keeps edges that then carry a single hexagon (a perimeter, with the
-   background on the other side), more than one country/coding unit, or more than one class. A
-   country absent from `country_scores` drops out of the sides, so an area that is not drawn is
-   not outlined either. The client asks for it by naming both layers.
+   background on the other side), more than one country/coding unit, or more than one class. The
+   client asks for it by naming both layers.
+   **No data is drawn.** A present-day (`natural_earth`) country with no value for the
+   variable-year is drawn as grey hexagons, class 99 (`NO_DATA_COLOR` in
+   `webapp/src/core/palettes.js`), and is outlined like any other area. It used to be left
+   undrawn with the land basemap showing through, which put a cream fringe round every coast
+   wherever the hexagons' edge and the coastline disagree. Historical units are still drawn
+   only in years they have a value -- they are an overlay, and a grey Soviet Union over Russia
+   in 2020 would be wrong. A present-day cell that a scored historical unit holds this year is
+   left to the data, and a no-data country any of whose cells is overlaid this year is left out
+   of the outline's sides altogether, or the overlaid area would be stroked as a honeycomb; both
+   read `demscore.hex_mesh_overlaps`. The area outline is 1.0px (it was 1.6).
 7. `scripts/build_variable_coverage.sh` precomputes `webapp/config/variable_coverage.json`:
    - reads per-variable, per-year country counts once
    - buckets each variable across its own first-to-last year (~40 bars, one per year where
@@ -146,10 +159,11 @@ The system turns tabular democracy indicator data into a thematic global hex map
    - each bar is one digit `0`-`9`: `0` is no data, and `1`-`9` scale how much data
      sits in that window — missing years and thin country coverage both pull it down
    - the variable list draws a strip under every row at once, so it cannot afford to
-     ask the database per row; the same file also sets the height of the main
-     timeline's read-ahead marks, so one variable reads as one shape in both places.
-     On the timeline a mark's height is that coverage and its fill is how much of
-     those years is in the tile cache -- one row, two readings
+     ask the database per row. The main timeline does ask, for the one variable on
+     screen: `/api/year-counts` gives it the same per-year count this script starts
+     from, so it can draw one mark per year and say the count in its hover card. Its
+     marks fall back to this file's buckets until that answers. A mark's height is
+     that coverage and its fill is how much of the year is in the tile cache
    - the same data backs the COVERAGE block at the foot of the variable hover card,
      which adds the axis years and an explanation the row itself has no room for
 8. The map UI sends WMS requests with `dataset`, `variable`, `year` and `hex_size`, naming
@@ -314,6 +328,11 @@ so an unknown dataset is a 400 rather than a silent fall back to `v_dem`:
   and how many countries and hexagons it accounts for, plus the sentence the always-visible
   line under the map says. The client falls back to a constant naming the same sources if the
   fetch fails, because an attribution that depends on a request succeeding is not one
+- `/api/year-counts?dataset=&variable=` — how many countries carry a value in each year of
+  one variable, counted exactly as `scripts/build_variable_coverage.sh` counts (distinct
+  *mapped* countries). The timeline reads it for its one-mark-per-year heights and for the
+  count in its hover card. Per variable, on demand, rather than in the coverage config file,
+  because every variable's per-year counts would about triple a payload every page load pays
 - `/api/source-coverage` — what the source measured for this variable-year against what the
   map can draw of it. `sourceCountries`, `mappedCountries`, `unrepresentedCountries`,
   `mappedByGeometryConfidence`, and `unrepresented[]` naming each entity with the reason
@@ -442,7 +461,12 @@ Set cache toggle in `.env`:
   Mercator scaled area by sec^2(latitude) and the mesh inherited it, so Russia carried
   795 hexagons across 17.0M km2 while Brazil carried 85 across 8.5M.
   - there is a second mesh, `demscore.hex_mesh_mercator`, cut in EPSG:3857 by
-    `sql/mapserver_hex_mercator.sql`, and the web app's projection toggle switches to it.
+    `sql/mapserver_hex_mercator.sql`. The web app's projection toggle used to switch to it;
+    it was withdrawn from the View switch at the client's request (`offered: false` in
+    `webapp/src/core/projection.js`) and everything behind it is left in place. The
+    no-data hexagons (above) are drawn by the Equal Earth layers only; offering Mercator
+    again means giving `hex_variable_mercator` / `hex_outline_mercator` the same branch and a
+    Mercator `hex_mesh_overlaps`.
     It is a second mesh and not the first one reprojected: a hexagon is a hexagon only in
     the plane it was cut in, and an Equal Earth cell pushed into Mercator is drawn twice as
     tall as it is wide by 60N and as a sliver by 80N. What the toggle compares is what a
@@ -647,12 +671,16 @@ Before merging changes:
 - Each colour scheme has its own tile cache, because the scheme is in the request URL. That
   is what keeps them from serving each other's colours, but it also means the mapcache
   warm-up (`scripts/preload_mapcache_tiles.sh`) and the in-browser read-ahead cover one
-  scheme at a time: switching schemes is a cold cache until it refills. The default scheme
-  sends no `palette` parameter at all, so the tiles everyone who never touches the control
-  gets are the ones that were already cached before the control existed.
-- Both diverging schemes are non-monotonic in lightness: `default` and `indigo_amber` each
-  have two classes that print as the same grey. A reader who cannot use hue at all wants a
-  sequential scheme, which is what `viridis` and `cividis` are there for.
+  scheme at a time: switching schemes is a cold cache until it refills. Blue-Red (`default`)
+  sends no `palette` parameter at all, as it always has. The reader's default became
+  Indigo-amber at the client's request, and it is named in every request, so the tiles a
+  reader who never touches the control gets are the `palette=indigo_amber` ones -- which is
+  what `preload_mapcache_tiles.sh` now warms first.
+- Only two schemes are offered: Indigo-amber and Blue-Red. Viridis and Cividis were withdrawn
+  from the picker at the client's request (`offered: false` in `palettes.js`; still generated
+  and served). Both offered schemes are diverging and non-monotonic in lightness, each with
+  two classes that print as the same grey, so there is no longer a scheme for a reader who
+  cannot use hue at all, or for greyscale print. That was accepted knowingly.
 - The diverging ramp is not monotonic in lightness: classes 2 and 7 print as the same grey.
   That is inherent to a diverging scheme and is the price of keeping polarity direction in
   the colour. What answers it is the equal-colour area outlines (on by default, and the

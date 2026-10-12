@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PG_HOST="${PG_HOST:-127.0.0.1}"
-PG_PORT="${PG_PORT:-5532}"
+PG_PORT="${PG_PORT:-${DEMSCORE_DB_PORT:-5532}}"
 PG_DB="${PG_DB:-demscore}"
 PG_USER="${PG_USER:-demscore}"
 export PGPASSWORD="${PG_PASSWORD:-demscore}"

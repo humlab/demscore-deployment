@@ -1,7 +1,7 @@
 services:
   router:
     image: nginx:1.27-alpine
-    container_name: demscore-router
+    container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-router
     depends_on:
       - web
       - mapcache
@@ -21,13 +21,13 @@ services:
 
   db:
     image: postgis/postgis:16-3.4
-    container_name: demscore-postgis
+    container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-postgis
     environment:
       POSTGRES_DB: demscore
       POSTGRES_USER: demscore
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-demscore}
     ports:
-      - "5532:5432"
+      - "${DEMSCORE_DB_PORT:-5532}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro
@@ -41,7 +41,7 @@ services:
 
   mapserver:
     image: camptocamp/mapserver:8.4
-    container_name: demscore-mapserver
+    container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapserver
     depends_on:
       db:
         condition: service_healthy
@@ -59,7 +59,7 @@ services:
 
   web-backend:
     image: node:20-alpine
-    container_name: demscore-web-backend
+    container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-web-backend
     depends_on:
       db:
         condition: service_healthy
@@ -83,7 +83,7 @@ services:
 
   web:
     image: nginx:1.27-alpine
-    container_name: demscore-web
+    container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-web
     depends_on:
       - mapserver
       - web-backend
@@ -94,7 +94,7 @@ services:
 
   mapcache:
     image: nginx:1.27-alpine
-    container_name: demscore-mapcache
+    container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache
     depends_on:
       - mapserver
     environment:
