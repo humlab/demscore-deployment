@@ -26,8 +26,10 @@ Options:
   --tile-size N          WMS tile WIDTH/HEIGHT in pixels (default: 512)
   --hex-size N           hex_size WMS parameter (default: the world stop of the
                          app's ladder, 200000 in either projection)
-  --palette LIST         Comma-separated palette filter (default: all app
-                         palettes: default,indigo_amber,viridis,cividis)
+  --palette LIST         Comma-separated palette filter (default: the two the
+                         app offers, indigo_amber,default. viridis and
+                         cividis are still accepted, though the app no
+                         longer offers them)
   --latest-year-only     Warm only each variable's latest available year
   --dataset LIST         Comma-separated dataset filter (e.g. qog,repdem)
   --max-requests N       Stop after N requests (for smoke testing)
@@ -60,7 +62,7 @@ ZOOM_MAX=4
 TILE_SIZE=512
 PROJECTION=equalearth
 HEX_SIZE=""
-PALETTE_FILTER="default,indigo_amber,viridis,cividis"
+PALETTE_FILTER="indigo_amber,default"
 LATEST_YEAR_ONLY=0
 DATASET_FILTER=""
 MAX_REQUESTS=0

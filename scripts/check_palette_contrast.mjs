@@ -27,12 +27,10 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { MAP_PALETTES, paletteBands } from "../webapp/src/core/palettes.js";
+import { MAP_PALETTES, NO_DATA_CLASS_IDX, NO_DATA_COLOR, paletteBands } from "../webapp/src/core/palettes.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MAPFILE_CLASSES = path.join(ROOT, "mapserver", "hex_classes.inc");
-const MAP_CONTROLLER = path.join(ROOT, "webapp", "src", "controllers", "MapController.js");
-const LAND_BASEMAP_SOURCE = MAP_CONTROLLER;
 
 const VERBOSE = process.argv.includes("--verbose");
 
@@ -49,7 +47,7 @@ const VERBOSE = process.argv.includes("--verbose");
 const MIN_ADJACENT_DELTA_E = 9;
 const MIN_ADJACENT_DELTA_E_CVD = 7;
 const MIN_ADJACENT_GREY_DELTA = 0.03; // relative luminance, 0..1
-// The land basemap is not part of the ramp, so it has more room to be told
+// The no-data grey is not part of the ramp, so it has more room to be told
 // apart from every class than two classes have from each other.
 const MIN_NODATA_DELTA_E = 18;
 
@@ -164,14 +162,21 @@ async function readMapfileBands() {
   return byClassIndex;
 }
 
-// The no-data colour is the land basemap: a country with no value for this
-// variable and year is not drawn at all, so what shows through is the land. It
-// is therefore a colour on the map that every ramp has to stay clear of.
-async function readNoDataColor() {
-  const text = await readFile(LAND_BASEMAP_SOURCE, "utf8");
-  const match = /const LAND_BASEMAP_COLOR\s*=\s*"(#[0-9a-f]{6})"/i.exec(text);
-  if (!match) throw new Error(`could not find LAND_BASEMAP_COLOR in ${LAND_BASEMAP_SOURCE}`);
-  return parseHex(match[1]);
+// The no-data colour used to be the land basemap showing through where no
+// hexagon was drawn, read out of MapController.js. A present-day country with no
+// value is now painted as hexagons in NO_DATA_COLOR, class NO_DATA_CLASS_IDX, so
+// both halves of it are checked: that the mapfile paints what palettes.js says,
+// and that every offered ramp stays clear of it.
+function checkNoDataAgrees(fromMapfile) {
+  const painted = fromMapfile.get(NO_DATA_CLASS_IDX);
+  if (!painted) {
+    fail(`hex_classes.inc has no no-data class ${NO_DATA_CLASS_IDX} — run node scripts/build_hex_classes.mjs`);
+  } else if (toHex(painted) !== NO_DATA_COLOR.toLowerCase()) {
+    fail(
+      `no-data class ${NO_DATA_CLASS_IDX}: mapfile ${toHex(painted)} but palettes.js ${NO_DATA_COLOR} — ` +
+        "run node scripts/build_hex_classes.mjs",
+    );
+  }
 }
 
 // ---- checks ---------------------------------------------------------------
@@ -289,7 +294,7 @@ function checkNoData(rampName, colors, noData) {
     if (separation < MIN_NODATA_DELTA_E) {
       fail(
         `${rampName} class ${i + 1} (${toHex(colors[i])}) is only delta-E ${separation.toFixed(1)} from the ` +
-          `no-data land colour ${toHex(noData)} — "not drawn" will read as a class`,
+          `no-data colour ${toHex(noData)} — "no value" will read as a class`,
       );
     }
   }
@@ -321,7 +326,7 @@ function checkTextTokens() {
     ["body text on white", "#3b3838", "#ffffff"],
     ["muted text on white", "#6b6664", "#ffffff"],
     ["muted text on panel surface", "#6b6664", "#f5f5f5"],
-    ["selected variable row", "#1d3c4f", "#d7e3ee"],
+    ["selected variable row", "#1d3c4f", "#9dbfda"],
   ];
 
   for (const [label, foreground, background] of pairs) {
@@ -335,8 +340,18 @@ function checkTextTokens() {
 // ---- main ----------------------------------------------------------------
 
 const mapfileBands = await readMapfileBands();
-const noData = await readNoDataColor();
+const noData = parseHex(NO_DATA_COLOR);
 const bands = paletteBands();
+
+// A band is held to the no-data rule only while a scheme the reader can pick
+// uses it. Cividis's mid-grey class sits right on the no-data grey, which is
+// fine while it is withdrawn and is exactly what this should catch if it is
+// offered again.
+const offeredBases = new Set(
+  Object.values(MAP_PALETTES)
+    .filter((palette) => palette.offered !== false)
+    .flatMap((palette) => [palette.signed.base, palette.neutral.base]),
+);
 
 // Which schemes each band serves, so a failure names something a reader would
 // recognise rather than a number.
@@ -354,14 +369,15 @@ heading("legend bar vs. mapfile");
 for (const [base, colors] of bands) {
   checkBandAgrees(bandNames.get(base), base, colors, mapfileBands);
 }
+checkNoDataAgrees(mapfileBands);
 if (failures.length === 0) {
-  console.log(`  all ${bands.length} bands match the classes MapServer paints`);
+  console.log(`  all ${bands.length} bands and the no-data class match the classes MapServer paints`);
 }
 
 for (const [base, colors] of bands) {
   const name = bandNames.get(base);
   checkRamp(name, colors.map(parseHex));
-  checkNoData(name, colors.map(parseHex), noData);
+  if (offeredBases.has(base)) checkNoData(name, colors.map(parseHex), noData);
 }
 
 checkTextTokens();

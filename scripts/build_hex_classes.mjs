@@ -18,7 +18,13 @@ import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-import { CLASS_COUNT, paletteBands, MAP_PALETTES } from "../webapp/src/core/palettes.js";
+import {
+  CLASS_COUNT,
+  MAP_PALETTES,
+  NO_DATA_CLASS_IDX,
+  NO_DATA_COLOR,
+  paletteBands,
+} from "../webapp/src/core/palettes.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const TARGET = path.join(ROOT, "mapserver", "hex_classes.inc");
@@ -81,6 +87,22 @@ function render() {
       );
     });
   }
+
+  // Not a band: the one colour every scheme shares, for present-day countries
+  // with no value this year. The DATA query emits this class_idx for them.
+  lines.push(
+    `# class_idx ${NO_DATA_CLASS_IDX} -- no data (every scheme, every polarity)`,
+    "  CLASS",
+    `    NAME "${NO_DATA_CLASS_IDX}"`,
+    `    EXPRESSION ([class_idx] = ${NO_DATA_CLASS_IDX})`,
+    "    STYLE",
+    `      COLOR ${toRgb(NO_DATA_COLOR)}`,
+    "      OUTLINECOLOR 255 255 255",
+    "      WIDTH 0.25",
+    "    END",
+    "  END",
+    "",
+  );
 
   return `${lines.join("\n").trimEnd()}\n`;
 }

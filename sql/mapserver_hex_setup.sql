@@ -35,6 +35,7 @@ DROP TABLE IF EXISTS demscore.hex_border_sides_mercator;
 DROP TABLE IF EXISTS demscore.hex_border_edges_mercator;
 DROP TABLE IF EXISTS demscore.hex_borders_mercator;
 DROP TABLE IF EXISTS demscore.hex_mesh_mercator;
+DROP TABLE IF EXISTS demscore.hex_mesh_overlaps;
 DROP TABLE IF EXISTS demscore.hex_border_sides;
 DROP TABLE IF EXISTS demscore.hex_border_edges;
 -- The single-row-per-country-pair table these two replace. Still dropped so a
@@ -1025,10 +1026,50 @@ CREATE INDEX hex_border_edges_size_idx ON demscore.hex_border_edges (hex_size_m)
 CREATE INDEX hex_border_edges_geom_gix ON demscore.hex_border_edges USING GIST (geom);
 CREATE INDEX hex_border_sides_country_idx ON demscore.hex_border_sides (country_id);
 
+-- Every cell one country holds that another country holds too, by exact
+-- geometry -- the same identity the border tables rely on, and it holds for the
+-- same reason: every country's mesh is part of one global grid.
+--
+-- It exists for the no-data hexagons. A present-day country with no value for
+-- the year is drawn in the no-data grey, so the map is hexagons to the coast
+-- rather than hexagons with bare land showing round them. But a historical
+-- unit borrows its cells from the present-day countries under it (see "a
+-- historical country borrows a cell" in AGENTS.md), so in 1850 Germany has no
+-- value while Prussia and its neighbours do, on the very same cells. Two reads:
+--
+--   * the fill layer leaves out a no-data cell when a scored country holds the
+--     same cell, so the grey never lies under (or over) the data;
+--   * the outline layer leaves a no-data country out of the sides altogether
+--     when any of its cells is overlaid this year. Otherwise every edge inside
+--     the overlay has two countries on it and is stroked as a border, and the
+--     whole overlaid area is drawn as a honeycomb.
+--
+-- Present-day countries never share a cell with each other -- the dealing passes
+-- above keep them a partition -- so every row here has a historical unit on at
+-- least one side. It does not depend on dataset, variable or year.
+CREATE TABLE demscore.hex_mesh_overlaps (
+  hex_size_m INTEGER NOT NULL,
+  country_id BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
+  hex_n INTEGER NOT NULL,
+  other_country_id BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
+  PRIMARY KEY (country_id, hex_size_m, hex_n, other_country_id)
+);
+
+INSERT INTO demscore.hex_mesh_overlaps (hex_size_m, country_id, hex_n, other_country_id)
+SELECT a.hex_size_m, a.country_id, a.hex_n, b.country_id
+FROM demscore.hex_mesh a
+JOIN demscore.hex_mesh b
+  ON b.hex_size_m = a.hex_size_m
+ AND b.country_id <> a.country_id
+ AND b.geom ~= a.geom;
+
+CREATE INDEX hex_mesh_overlaps_other_idx ON demscore.hex_mesh_overlaps (other_country_id, hex_size_m);
+
 ANALYZE demscore.countries;
 ANALYZE demscore.hex_mesh;
 ANALYZE demscore.hex_border_edges;
 ANALYZE demscore.hex_border_sides;
+ANALYZE demscore.hex_mesh_overlaps;
 
 CREATE OR REPLACE FUNCTION demscore.country_scores(
   p_dataset TEXT DEFAULT 'v_dem',
