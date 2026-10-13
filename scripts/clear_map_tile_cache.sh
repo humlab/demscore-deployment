@@ -64,7 +64,10 @@ if ! podman container exists "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2
   exit 1
 fi
 
-if ! podman compose ps --format '{{.Service}}\t{{.State}}' 2>/dev/null | awk -F'\t' '$1=="mapcache" && $2=="running" {found=1} END{exit found?0:1}'; then
+# Asked of podman rather than of compose: `compose ps --format` exists only in
+# Compose v2, and under the v1 docker-compose some servers still run as podman's
+# compose provider it is an error, which this read as "not running".
+if [[ "$(podman container inspect --format '{{.State.Running}}' "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null)" != "true" ]]; then
   echo "The mapcache container is not running. Start services with ./scripts/dev_up.sh first." >&2
   exit 1
 fi

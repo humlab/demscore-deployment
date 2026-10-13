@@ -198,7 +198,12 @@ podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f -
 # reader who was on the page needs a hard reload as well.
 if [[ "${DEMSCORE_ENABLE_MAPCACHE:-0}" == "1" ]] && podman container exists "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null; then
   echo "Clearing the WMS tile cache, which still holds the previous geometry..."
-  "${ROOT_DIR}/scripts/clear_map_tile_cache.sh" --quiet
+  # Not fatal: the database work above is done either way, and the checks below
+  # are what say whether it is right. Stopping here once skipped all of them.
+  if ! "${ROOT_DIR}/scripts/clear_map_tile_cache.sh" --quiet; then
+    echo "WARNING: the WMS tile cache was NOT cleared and may serve the old map." >&2
+    echo "WARNING: run ./deploy.sh clear-map-tile-cache once the problem above is fixed." >&2
+  fi
 fi
 
 # Every source observation must now be either drawn or explicitly refused. This
