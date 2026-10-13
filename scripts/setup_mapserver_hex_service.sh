@@ -78,7 +78,7 @@ if [[ ! -f "$CUSTOM_HISTORICAL_FILE" ]]; then
   exit 1
 fi
 
-echo "Starting services for local dev..."
+echo "Starting services..."
 "${ROOT_DIR}/scripts/start_services.sh"
 
 echo "Waiting for database readiness..."
