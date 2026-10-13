@@ -23,12 +23,20 @@ The system turns tabular democracy indicator data into a thematic global hex map
      code systems), not an indicator, and is excluded from the melt; excluding only the three
      read by name once let `u_vdem_country_year_country_id` and friends become variables
    - `-11111` is Demscore's marker for an observation lost in the translation to the requested
-     unit of analysis, not a measurement, and is filtered out (`MISSING_CODE`). Loading it put
+     unit of analysis, not a measurement, and is filtered out (`MISSING_CODES`). Loading it put
      8402 rows of it into REPDEM, where `ntile()` classed them lowest and `AVG()` folded them
-     into the hex average, dragging the legend floor to -11111. The variables insert reads the
-     same filtered rows, so a column left with nothing — the ones whose real values are text,
-     like `cab_name`, `elecdate`, `date_in` — is never registered; the load names each one it
-     dropped
+     into the hex average, dragging the legend floor to -11111. The codebooks' other marker,
+     `-22222` (no translation possible, though the original has the observation elsewhere), is
+     filtered with it; no export in `data/` carries it yet. The variables insert reads the
+     same filtered rows, so a column left with nothing is never registered; the load names
+     each one it dropped
+   - a column is an indicator only if **every** value it has is a number. One text value
+     anywhere drops the whole column, not just that cell. Casting cell by cell let REPDEM's
+     `cab_composition2` through: a list of party IDs, where a coalition (`10005,10004,10001`)
+     failed the cast and a single-party cabinet (`10005`) passed as the number 10005, so the
+     map drew every coalition as no data and ranked party IDs into colour classes. The
+     columns this drops are all identifiers or labels — cabinet names and compositions,
+     election and cabinet dates, V-Dem's heads of state and government by name
    - a variable that is an exact subset of another in the same dataset is dropped, so QoG's
      twelve `qog_oecd_ts_*` columns give way to their global `qog_std_ts_*` twins instead of
      doubling the variable list under the codebook's identical titles. Redundancy is proved
@@ -41,8 +49,8 @@ The system turns tabular democracy indicator data into a thematic global hex map
      request still renders them; they only leave the list the web client offers. Deleting would
      be wrong: `basic` revises `wecee`'s figures (disagreeing on up to 16% of shared
      country-years for `num_parties`) and, pooled over all years `wecee` adds no country, but
-     the map draws one year at a time and nine country-year cells sit only in `wecee` —
-     Ireland 2020 in `cab_composition2`, where `basic` carries 2025 in its place. The load
+     the map draws one year at a time and eight country-year cells sit only in `wecee` —
+     Finland 1958 in `seats_total`, a year `basic` skips between 1957 and 1959. The load
      prints that count rather than claiming the twin adds nothing
 3. `scripts/load_variable_metadata.sh` enriches variables with codebook metadata:
    - converts each dataset `codebook.pdf` to text (`pdftotext -layout`)
@@ -279,8 +287,8 @@ The system turns tabular democracy indicator data into a thematic global hex map
   selection, mostly one variable per section, so it seeds the grouping but cannot be it.
   Demscore's own 13 published Thematic Datasets were tested against this selection and fit it
   badly — five themes match nothing here, seven variables land in no theme at all (including
-  four of the five V-Dem democracy indices, since there is no Democracy theme), and all eleven
-  REPDEM variables collapse into one. `topic_classification.wip.md` has the counts and method
+  four of the five V-Dem democracy indices, since there is no Democracy theme), and every
+  REPDEM variable collapses into one. `topic_classification.wip.md` has the counts and method
 - `mapcache/cache-enabled.conf`, `mapcache/cache-disabled.conf`: reverse-proxy WMS gateway
   configs; the same `/mapserver` route passes through or caches tiles based on
   `DEMSCORE_ENABLE_MAPCACHE`

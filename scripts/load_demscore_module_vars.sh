@@ -16,7 +16,12 @@ DATASETS=("QoG" "REPDEM" "V-Dem")
 # (cabinet names, election dates, party lists) do not survive the numeric melt at
 # all, so the marker was all they had left: filtering it here empties them, and the
 # variables insert reads the same filtered rows, so they are never registered.
-MISSING_CODE="-11111"
+#
+# -22222 is the codebooks' other Demscore code: no observation could be translated
+# to this unit, although the original data has one elsewhere. Equally a marker,
+# not a measurement. No export in data/ carries it yet; one that did would map it
+# as a real value of -22222, which is the failure -11111 was filtered for.
+MISSING_CODES="-11111, -22222"
 
 for dataset in "${DATASETS[@]}"; do
   csv_path="${BASE_DIR}/${dataset}/data.csv"
@@ -185,6 +190,7 @@ WITH extracted AS (
     NULLIF(TRIM(s."${country_col}"), '') AS country_name,
     ${year_expr} AS year,
     kv.key AS variable,
+    kv.value AS raw_value,
     CASE
       WHEN kv.value ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN kv.value::DOUBLE PRECISION
       ELSE NULL
@@ -192,12 +198,23 @@ WITH extracted AS (
   FROM demscore.${stage_name} s
   CROSS JOIN LATERAL (SELECT to_jsonb(s) AS row_json) src
   CROSS JOIN LATERAL jsonb_each_text(src.row_json - ARRAY[${exclude_sql}]) kv
+), not_numeric AS (
+  -- A column is an indicator only if every value it has is a number. Casting
+  -- cell by cell let REPDEM's cab_composition2 through: a list of party IDs,
+  -- where a coalition ("10005,10004,10001") failed the cast and was dropped
+  -- while a single-party cabinet ("10005") passed as the number 10005. The
+  -- map then drew coalitions as no data and ranked party IDs into classes.
+  SELECT DISTINCT variable
+  FROM extracted
+  WHERE value IS NULL
+    AND NULLIF(TRIM(raw_value), '') IS NOT NULL
 ), typed AS (
   SELECT dataset, iso3, country_name, year, variable, value
   FROM extracted
   WHERE year IS NOT NULL
     AND value IS NOT NULL
-    AND value <> ${MISSING_CODE}
+    AND value NOT IN (${MISSING_CODES})
+    AND variable NOT IN (SELECT variable FROM not_numeric)
 )
 INSERT INTO demscore.variables (dataset, variable)
 SELECT DISTINCT dataset, variable
@@ -211,6 +228,7 @@ WITH extracted AS (
     NULLIF(TRIM(s."${country_col}"), '') AS country_name,
     ${year_expr} AS year,
     kv.key AS variable,
+    kv.value AS raw_value,
     CASE
       WHEN kv.value ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN kv.value::DOUBLE PRECISION
       ELSE NULL
@@ -218,12 +236,23 @@ WITH extracted AS (
   FROM demscore.${stage_name} s
   CROSS JOIN LATERAL (SELECT to_jsonb(s) AS row_json) src
   CROSS JOIN LATERAL jsonb_each_text(src.row_json - ARRAY[${exclude_sql}]) kv
+), not_numeric AS (
+  -- A column is an indicator only if every value it has is a number. Casting
+  -- cell by cell let REPDEM's cab_composition2 through: a list of party IDs,
+  -- where a coalition ("10005,10004,10001") failed the cast and was dropped
+  -- while a single-party cabinet ("10005") passed as the number 10005. The
+  -- map then drew coalitions as no data and ranked party IDs into classes.
+  SELECT DISTINCT variable
+  FROM extracted
+  WHERE value IS NULL
+    AND NULLIF(TRIM(raw_value), '') IS NOT NULL
 ), typed AS (
   SELECT dataset, iso3, country_name, year, variable, value
   FROM extracted
   WHERE year IS NOT NULL
     AND value IS NOT NULL
-    AND value <> ${MISSING_CODE}
+    AND value NOT IN (${MISSING_CODES})
+    AND variable NOT IN (SELECT variable FROM not_numeric)
 )
 INSERT INTO demscore.dataset_values (variable_id, year, iso3, country_name, value, country_id)
 SELECT
@@ -238,9 +267,9 @@ JOIN demscore.variables v
   ON v.dataset = t.dataset
  AND v.variable = t.variable;
 
--- Name the melted columns that produced nothing, so a column silently lost to the
--- numeric cast or to MISSING_CODE shows up in the load log instead of just going
--- absent from the variable list.
+-- Name the melted columns that were not registered, so a column left out for
+-- holding text or emptied by MISSING_CODES shows up in the load log instead of
+-- just going absent from the variable list.
 DO \$\$
 DECLARE
   empty_cols TEXT;
@@ -258,7 +287,7 @@ BEGIN
         AND v.variable = c.column_name
     );
   IF empty_cols IS NOT NULL THEN
-    RAISE NOTICE '%: dropped column(s) with no usable values: %', '${dataset_key}', empty_cols;
+    RAISE NOTICE '%: dropped column(s) that are not wholly numeric or hold only missing codes: %', '${dataset_key}', empty_cols;
   END IF;
 END
 \$\$;
@@ -361,8 +390,8 @@ $$;
 --
 -- It is not a clean superset, though. Pooled over all years wecee adds no country,
 -- but the map draws one year at a time, and in a given year a country can sit in
--- wecee and be absent from basic — Ireland in 2020 for cab_composition2, where
--- basic carries 2025 in its place. Nine such cells exist in total, so the load
+-- wecee and be absent from basic — Finland in 1958 for seats_total, a year basic
+-- skips between 1957 and 1959. Eight such cells exist in total, so the load
 -- prints the number it is hiding instead of pretending the twin adds nothing.
 DO $$
 DECLARE
