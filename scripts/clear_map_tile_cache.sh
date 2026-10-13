@@ -60,7 +60,7 @@ fi
 # is rather than exiting quietly on a cache that is still full.
 if ! podman container exists "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null; then
   echo "The mapcache container does not exist, so there is no server tile cache to clear." >&2
-  echo "If tiles are still held in the mapcache_data volume, start services with ./scripts/dev_up.sh and run this again." >&2
+  echo "If tiles are still held in the mapcache_data volume, start services with ./scripts/start_services.sh and run this again." >&2
   exit 1
 fi
 
@@ -68,7 +68,7 @@ fi
 # Compose v2, and under the v1 docker-compose some servers still run as podman's
 # compose provider it is an error, which this read as "not running".
 if [[ "$(podman container inspect --format '{{.State.Running}}' "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null)" != "true" ]]; then
-  echo "The mapcache container is not running. Start services with ./scripts/dev_up.sh first." >&2
+  echo "The mapcache container is not running. Start services with ./scripts/start_services.sh first." >&2
   exit 1
 fi
 

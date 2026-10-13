@@ -183,10 +183,14 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `compose.yml`: service definitions, ports, mounts, cache toggle wiring
 - `initdb/01_extensions.sql`: bootstrap PostGIS extensions
 - `scripts/load_demscore_module_vars.sh`: CSV-to-table loader
-- `scripts/dev_up.sh`: starts core services and conditionally includes `mapcache` based on `.env`,
-  then calls `sync_db_password.sh`
+- `scripts/start_services.sh`: builds `webapp/dist`, starts every service, then calls
+  `sync_db_password.sh`. The one start path for every environment -- `./deploy.sh start` and
+  `install` call it, and it was named `dev_up.sh` until that name was found to suggest it was
+  for development only. `mapcache` is always started; `DEMSCORE_ENABLE_MAPCACHE` in `.env`
+  decides whether it caches tiles or passes them straight through. A bare `podman compose
+  up -d` starts the same containers but skips the build and the password sync
 - `scripts/build_webapp.sh`: builds `webapp/dist` (webpack) inside a throwaway `node:20-alpine`
-  container, so a host needs podman and not Node. Run by `dev_up.sh` before nginx starts, and
+  container, so a host needs podman and not Node. Run by `start_services.sh` before nginx starts, and
   the one step any change under `webapp/` needs before it is served: the `web` container
   serves `dist`, not the source
 - `scripts/sync_db_password.sh`: `ALTER ROLE` over the trusted unix socket so the `demscore`
@@ -389,7 +393,7 @@ Set cache toggle in `.env`:
 - `DEMSCORE_ENABLE_MAPCACHE=1` (enable server/browser tile cache)
 
 1. Start services:
-   - `./scripts/dev_up.sh`
+   - `./scripts/start_services.sh`
 2. Load datasets:
    - `./scripts/load_demscore_module_vars.sh`
 3. Setup map-ready DB objects and smoke tests:
@@ -659,7 +663,7 @@ Before merging changes:
   trusts. The mismatch surfaces only where a container connects over TCP, which
   scram-sha-256 guards -- `ogr2ogr` in the setup script first, then `mapserver` and
   `web-backend` -- as `password authentication failed for user "demscore"`.
-  `scripts/sync_db_password.sh`, run on every `dev_up.sh`, reconciles the two.
+  `scripts/sync_db_password.sh`, run on every `start_services.sh`, reconciles the two.
 - No automated test suite currently exists; scripts provide operational smoke tests only.
 - The map is a WMS image, so nothing in it can be reached by assistive technology. The
   non-visual equivalent -- `#mapSummary` and `#mapAnnouncer` in

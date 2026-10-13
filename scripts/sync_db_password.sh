@@ -3,7 +3,7 @@
 #
 # POSTGRES_PASSWORD only does anything the first time the pg_data volume is
 # initialised. After that the password lives in the volume, and editing .env --
-# or letting deploy.sh generate one over a volume that a plain dev_up.sh had
+# or letting deploy.sh generate one over a volume that a plain start_services.sh had
 # already created with the compose default -- leaves the role behind while
 # every container is handed the new value.
 #

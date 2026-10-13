@@ -6,7 +6,7 @@
 #
 # Prerequisites:
 #   - TLS certificate (e.g. via certbot/Let's Encrypt)
-#   - Demscore containers running (./scripts/dev_up.sh)
+#   - Demscore containers running (./scripts/start_services.sh)
 #   - Router container exposed on port 8090 (the only exposed port; matches
 #     DEMSCORE_ROUTER_PORT in .env, default 8090 -- update every 8090 below
 #     if you changed it)

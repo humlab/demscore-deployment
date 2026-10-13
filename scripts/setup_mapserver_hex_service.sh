@@ -79,7 +79,7 @@ if [[ ! -f "$CUSTOM_HISTORICAL_FILE" ]]; then
 fi
 
 echo "Starting services for local dev..."
-"${ROOT_DIR}/scripts/dev_up.sh"
+"${ROOT_DIR}/scripts/start_services.sh"
 
 echo "Waiting for database readiness..."
 for _ in {1..30}; do

@@ -95,4 +95,4 @@ it's re-rendered from the database.
   that no longer exists.
 - `POSTGRES_PASSWORD` is only applied the first time the `pg_data` volume is
   created. Changing it in `.env` later requires `scripts/sync_db_password.sh`
-  (run automatically by `./scripts/dev_up.sh`) to reconcile it.
+  (run automatically by `./scripts/start_services.sh`) to reconcile it.

@@ -129,7 +129,7 @@ fi
 
 if [[ "${DEMSCORE_ENABLE_MAPCACHE:-0}" != "" ]] && ! is_truthy "${DEMSCORE_ENABLE_MAPCACHE:-0}"; then
   echo "DEMSCORE_ENABLE_MAPCACHE is not enabled in .env."
-  echo "Enable it first (DEMSCORE_ENABLE_MAPCACHE=1), then run ./scripts/dev_up.sh."
+  echo "Enable it first (DEMSCORE_ENABLE_MAPCACHE=1), then run ./scripts/start_services.sh."
   exit 1
 fi
 
@@ -137,7 +137,7 @@ fi
 # Compose v2, and under the v1 docker-compose some servers still run as podman's
 # compose provider it is an error, which this read as "not running".
 if [[ "$(podman container inspect --format '{{.State.Running}}' "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null)" != "true" ]]; then
-  echo "mapcache service is not running. Start services with ./scripts/dev_up.sh first." >&2
+  echo "mapcache service is not running. Start services with ./scripts/start_services.sh first." >&2
   exit 1
 fi
 

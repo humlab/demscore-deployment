@@ -88,7 +88,7 @@ cmd_install() {
 
   echo ""
   echo "Starting services..."
-  ./scripts/dev_up.sh
+  ./scripts/start_services.sh
 
   echo ""
   echo "Loading datasets..."
@@ -109,7 +109,7 @@ cmd_install() {
 
 cmd_start() {
   check_deps
-  ./scripts/dev_up.sh
+  ./scripts/start_services.sh
 }
 
 cmd_stop() {
