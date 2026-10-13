@@ -120,7 +120,7 @@ Tab from the address bar and do not touch the mouse.
 
 - [ ] Every stop shows a focus ring you can find without looking for it.
 - [ ] The order runs: About → hide side panel → search box → topic chips → dataset chips →
-      variable list → play → speed → year slider → hide timeline → zoom + / − →
+      variable list → play → speed → year slider → zoom + / − →
       attribution → map only → **View** (one stop) → the seven legend swatches →
       **Colours** → outline switch → hide map controls. The map dashboard is one row, so the
       order is the visible layout, left to right.
@@ -150,9 +150,9 @@ Tab from the address bar and do not touch the mouse.
       closes it without picking (and must not also leave map-only).
 - [ ] Arrow keys move between the two **View** options and each one takes effect: **Map**
       draws the map, **Table** replaces it. The group is one tab stop and the arrows wrap.
-- [ ] Each hide button (side panel, timeline, map controls) puts its panel away, is
+- [ ] Each hide button (side panel, map controls) puts its panel away, is
       announced as expanded/collapsed, and its name says what pressing it will do next.
-      Tabbing into a collapsed side panel or timeline brings it into view; tabbing out lets
+      Tabbing into a collapsed side panel brings it into view; tabbing out lets
       it go again. The map controls fold to the legend in the bottom-left corner, with the
       button that unfolds them beside it.
 - [ ] "Show only the map" hides the panels and leaves the map, itself and the credit line;
