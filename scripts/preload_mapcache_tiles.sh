@@ -44,9 +44,9 @@ Environment knobs:
   PGUSER                 Default: demscore
   PGDATABASE             Default: demscore
 
-If node is available, variable polarity is resolved from
-webapp/config/variable_polarity.json to match the browser's WMS URLs. Without
-node, the script warms all three polarity URLs for each variable/year.
+Variable polarity is resolved from webapp/config/variable_polarity.json, in
+the tools container's Node, to match the browser's WMS URLs. If that cannot
+run, the script warms all three polarity URLs for each variable/year.
 USAGE
 }
 
@@ -231,7 +231,11 @@ fi
 # whichever world is underneath it.
 ZOOM_ZERO_RESOLUTION=156543.03392804097
 
-TMP_DIR="$(mktemp -d)"
+# shellcheck source=scripts/lib/tools.sh
+source "${ROOT_DIR}/scripts/lib/tools.sh"
+# Inside the repository, where the tools container that resolves polarities
+# can read the combinations file.
+TMP_DIR="$(tool_tmpdir)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 TILES_FILE="$TMP_DIR/tiles.tsv"
@@ -291,8 +295,9 @@ GROUP BY v.dataset, v.variable, dv.year"
 annotate_polarities() {
   local polarity_file="$ROOT_DIR/webapp/config/variable_polarity.json"
 
-  if command -v node >/dev/null 2>&1 && [[ -f "$polarity_file" ]]; then
-    node --input-type=module - "$RAW_COMBOS_FILE" "$polarity_file" > "$COMBOS_FILE" <<'NODE'
+  # Node runs in the tools container (tools/Containerfile), not on the host.
+  if [[ -f "$polarity_file" ]] && run_tool node --input-type=module - \
+    "$(tool_path "$RAW_COMBOS_FILE")" "$(tool_path "$polarity_file")" > "$COMBOS_FILE" <<'NODE'
 import fs from "node:fs";
 
 const [, , combosPath, polarityPath] = process.argv;
@@ -350,8 +355,10 @@ if (rawCombos.length > 0) {
   }
 }
 NODE
+  then
+    :
   else
-    echo "node or webapp/config/variable_polarity.json not available; warming all polarity URLs." >&2
+    echo "The tools container or webapp/config/variable_polarity.json is not available; warming all polarity URLs." >&2
     awk -F'\t' 'BEGIN { OFS="\t" } NF >= 3 { print $1, $2, $3, "negative"; print $1, $2, $3, "positive"; print $1, $2, $3, "neutral" }' "$RAW_COMBOS_FILE" > "$COMBOS_FILE"
   fi
 }

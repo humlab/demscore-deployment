@@ -135,6 +135,19 @@ services:
     volumes:
       - ./data/reference:/data:ro
 
+  # Python, pdftotext and Node for the deployment scripts' helpers, so the host
+  # needs none of them. Run through scripts/lib/tools.sh, never started.
+  tools:
+    build:
+      context: ./tools
+      dockerfile: Containerfile
+    image: localhost/demscore-tools:1
+    profiles: ["setup"]
+    network_mode: none
+    working_dir: /work
+    volumes:
+      - ./:/work
+
 volumes:
   pg_data:
   mapcache_data:

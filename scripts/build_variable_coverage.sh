@@ -17,8 +17,13 @@ OUT_FILE="${OUT_FILE:-${ROOT_DIR}/webapp/config/variable_coverage.json}"
 # tell QoG's variables apart. Buckets are capped at one per year further down.
 BUCKET_TARGET="${BUCKET_TARGET:-40}"
 
-TMP_TSV="$(mktemp)"
-trap 'rm -f "$TMP_TSV"' EXIT
+# shellcheck source=scripts/lib/tools.sh
+source "${ROOT_DIR}/scripts/lib/tools.sh"
+# Inside the repository, where the tools container that runs the Python below
+# can read it.
+TMP_DIR="$(tool_tmpdir)"
+TMP_TSV="${TMP_DIR}/coverage.tsv"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo "Reading per-variable, per-year country counts..."
 # `country_id IS NOT NULL` matches the web-backend's own coverage query, so the
@@ -39,7 +44,8 @@ if [[ ! -s "$TMP_TSV" ]]; then
 fi
 
 echo "Bucketing coverage into ${BUCKET_TARGET}-step strips..."
-BUCKET_TARGET="$BUCKET_TARGET" OUT_FILE="$OUT_FILE" python3 - "$TMP_TSV" <<'PY'
+run_tool env BUCKET_TARGET="$BUCKET_TARGET" OUT_FILE="$(tool_path "$OUT_FILE")" \
+  python3 - "$(tool_path "$TMP_TSV")" <<'PY'
 import json
 import os
 import sys

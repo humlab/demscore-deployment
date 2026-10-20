@@ -1,0 +1,14 @@
+# The toolbox the deployment scripts run their helpers in, so a host needs bash,
+# curl and podman and nothing else: Python for the import checks and report,
+# the codebook parser and the coverage/credits builders; poppler's pdftotext
+# for the codebooks; Node for the tile preloader's polarity lookup.
+#
+# Built on the image scripts/build_webapp.sh already pulls, so a server that has
+# built the web app has most of this layer already. Built on first use by
+# `podman compose --profile setup run tools` (scripts/lib/tools.sh); bump the
+# tag in compose.yml when this file changes, or `podman compose build tools`.
+FROM docker.io/library/node:20-alpine
+
+RUN apk add --no-cache python3 poppler-utils
+
+WORKDIR /work

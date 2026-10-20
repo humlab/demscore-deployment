@@ -28,8 +28,13 @@ OUT_FILE="${OUT_FILE:-${ROOT_DIR}/webapp/config/attribution.json}"
 # the app actually asks for, so the weights are a weight somebody can see.
 WEIGHT_HEX_SIZE="${WEIGHT_HEX_SIZE:-100000}"
 
-TMP_TSV="$(mktemp)"
-trap 'rm -f "$TMP_TSV"' EXIT
+# shellcheck source=scripts/lib/tools.sh
+source "${ROOT_DIR}/scripts/lib/tools.sh"
+# Inside the repository, where the tools container that runs the Python below
+# can read it.
+TMP_DIR="$(tool_tmpdir)"
+TMP_TSV="${TMP_DIR}/sources.tsv"
+trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo "Reading the geometry sources that are actually on the map..."
 # demscore.countries first, because that is what gets drawn; the historical
@@ -72,8 +77,8 @@ if [[ ! -s "$TMP_TSV" ]]; then
   exit 1
 fi
 
-SOURCES_FILE="$SOURCES_FILE" OUT_FILE="$OUT_FILE" WEIGHT_HEX_SIZE="$WEIGHT_HEX_SIZE" \
-  python3 - "$TMP_TSV" <<'PY'
+run_tool env SOURCES_FILE="$(tool_path "$SOURCES_FILE")" OUT_FILE="$(tool_path "$OUT_FILE")" \
+  WEIGHT_HEX_SIZE="$WEIGHT_HEX_SIZE" python3 - "$(tool_path "$TMP_TSV")" <<'PY'
 import json
 import os
 import sys

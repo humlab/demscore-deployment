@@ -4,19 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-if ! command -v pdftotext >/dev/null 2>&1; then
-  echo "pdftotext is required but not found on PATH." >&2
-  exit 1
-fi
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "python3 is required but not found on PATH." >&2
-  exit 1
-fi
-
-if [[ ! -x "${ROOT_DIR}/scripts/extract_variable_metadata.py" ]]; then
-  chmod +x "${ROOT_DIR}/scripts/extract_variable_metadata.py"
-fi
+# pdftotext and the parser run in the tools container (tools/Containerfile),
+# so the host needs neither poppler nor Python.
+# shellcheck source=scripts/lib/tools.sh
+source "${ROOT_DIR}/scripts/lib/tools.sh"
 
 PDFS=(
   "${ROOT_DIR}/data/Demscore_Module_Vars/QoG/codebook.pdf"
@@ -47,7 +38,8 @@ if ! podman compose exec -T db pg_isready -U demscore -d demscore >/dev/null 2>&
   exit 1
 fi
 
-tmp_dir="$(mktemp -d)"
+# Inside the repository, where the tools container can write to it.
+tmp_dir="$(tool_tmpdir)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
 qog_txt="${tmp_dir}/qog_codebook.txt"
@@ -56,16 +48,20 @@ vdem_txt="${tmp_dir}/vdem_codebook.txt"
 raw_csv="${tmp_dir}/variable_metadata_raw.csv"
 
 echo "Extracting PDF text..."
-pdftotext -layout "${ROOT_DIR}/data/Demscore_Module_Vars/QoG/codebook.pdf" "$qog_txt"
-pdftotext -layout "${ROOT_DIR}/data/Demscore_Module_Vars/REPDEM/codebook.pdf" "$repdem_txt"
-pdftotext -layout "${ROOT_DIR}/data/Demscore_Module_Vars/V-Dem/codebook.pdf" "$vdem_txt"
+run_tool sh -euc '
+  pdftotext -layout data/Demscore_Module_Vars/QoG/codebook.pdf "$1"
+  pdftotext -layout data/Demscore_Module_Vars/REPDEM/codebook.pdf "$2"
+  pdftotext -layout data/Demscore_Module_Vars/V-Dem/codebook.pdf "$3"
+' sh "$(tool_path "$qog_txt")" "$(tool_path "$repdem_txt")" "$(tool_path "$vdem_txt")"
 
 echo "Parsing codebook entries..."
-python3 "${ROOT_DIR}/scripts/extract_variable_metadata.py" \
-  --output-csv "$raw_csv" \
-  --input "${qog_txt}::${ROOT_DIR}/data/Demscore_Module_Vars/QoG/codebook.pdf" \
-  --input "${repdem_txt}::${ROOT_DIR}/data/Demscore_Module_Vars/REPDEM/codebook.pdf" \
-  --input "${vdem_txt}::${ROOT_DIR}/data/Demscore_Module_Vars/V-Dem/codebook.pdf"
+# The source paths are recorded in variable_metadata.source_pdf, so they are
+# given as the container sees them: repository-relative, the same on any host.
+run_tool python3 scripts/extract_variable_metadata.py \
+  --output-csv "$(tool_path "$raw_csv")" \
+  --input "$(tool_path "$qog_txt")::data/Demscore_Module_Vars/QoG/codebook.pdf" \
+  --input "$(tool_path "$repdem_txt")::data/Demscore_Module_Vars/REPDEM/codebook.pdf" \
+  --input "$(tool_path "$vdem_txt")::data/Demscore_Module_Vars/V-Dem/codebook.pdf"
 
 echo "Copying parsed metadata into DB container..."
 podman compose cp "$raw_csv" db:/tmp/variable_metadata_raw.csv
