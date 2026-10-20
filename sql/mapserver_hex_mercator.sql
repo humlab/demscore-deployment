@@ -480,7 +480,7 @@ WITH segments AS (
   SELECT
     hm.hex_size_m,
     hm.country_id,
-    (ST_DumpSegments(hm.geom)).geom AS geom
+    (ST_DumpSegments(ST_ForcePolygonCCW(hm.geom))).geom AS geom
   FROM demscore.hex_mesh_mercator hm
 ), directed AS (
   SELECT
@@ -491,13 +491,16 @@ WITH segments AS (
            <= (ST_X(ST_EndPoint(geom)), ST_Y(ST_EndPoint(geom)))
       THEN geom
       ELSE ST_Reverse(geom)
-    END AS geom
+    END AS geom,
+    (ST_X(ST_StartPoint(geom)), ST_Y(ST_StartPoint(geom)))
+      <= (ST_X(ST_EndPoint(geom)), ST_Y(ST_EndPoint(geom))) AS on_left
   FROM segments
 ), edges AS (
   SELECT
     hex_size_m,
     geom,
     array_agg(country_id) AS countries,
+    array_agg(on_left) AS on_left,
     count(*) AS hex_count,
     count(DISTINCT country_id) AS country_count
   FROM directed
@@ -507,7 +510,8 @@ SELECT
   row_number() OVER () AS edge_id,
   hex_size_m,
   geom,
-  countries
+  countries,
+  on_left
 FROM edges
 WHERE country_count > 1
    OR hex_count = 1;
@@ -525,14 +529,13 @@ FROM hex_border_build_mercator;
 CREATE TABLE demscore.hex_border_sides_mercator (
   edge_id BIGINT NOT NULL REFERENCES demscore.hex_border_edges_mercator(id) ON DELETE CASCADE,
   country_id BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
-  hex_count INTEGER NOT NULL,
-  PRIMARY KEY (edge_id, country_id)
+  on_left BOOLEAN NOT NULL,
+  PRIMARY KEY (edge_id, country_id, on_left)
 );
 
-INSERT INTO demscore.hex_border_sides_mercator (edge_id, country_id, hex_count)
-SELECT b.edge_id, c, count(*)
-FROM hex_border_build_mercator b, unnest(b.countries) AS c
-GROUP BY b.edge_id, c;
+INSERT INTO demscore.hex_border_sides_mercator (edge_id, country_id, on_left)
+SELECT DISTINCT b.edge_id, s.country_id, s.on_left
+FROM hex_border_build_mercator b, unnest(b.countries, b.on_left) AS s (country_id, on_left);
 
 CREATE INDEX hex_border_edges_mercator_size_idx
   ON demscore.hex_border_edges_mercator (hex_size_m);

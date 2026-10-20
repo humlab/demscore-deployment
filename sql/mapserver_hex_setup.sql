@@ -910,12 +910,12 @@ $$;
 
 -- Where to draw the black outline.
 --
--- Same-country neighbouring hexagons that landed in the same quantile class are
--- interior to one colour area and keep only their white hairlines. Different
--- rendered country/coding-unit ids are still stroked even when they share a
--- class, because historical overlays and split countries otherwise make real
--- boundaries, and sometimes apparent coastlines, disappear when adjacent units
--- happen to use the same shade.
+-- The outline is around colour areas, not countries: neighbouring hexagons that
+-- landed in the same quantile class are interior to one colour area and keep
+-- only their white hairlines, whichever country each belongs to. Two countries
+-- the legend paints the same shade are one area, and so are all the grey
+-- no-data countries. Stroking every country boundary as well, which this once
+-- did, made the switch that asks for "equal values" outline countries instead.
 --
 -- Dissolving that perimeter at render time (ST_Union per class, per tile) would
 -- be both slow and wrong at tile seams, where the union cannot see the
@@ -938,25 +938,28 @@ $$;
 -- as this table first did, dropped the third and with it 1 899 edges per mesh.
 --
 -- What the split buys is that the render-time question -- is there anything on
--- the other side of this edge, is it a different country/coding unit, and is it
--- a different colour? -- is answered from the mesh as a whole rather than from
--- the hexagons that happened to fall inside the request box. Counting only the
--- countries a request actually renders, an edge is stroked when either
---   * exactly one hexagon sits on it, so it is a perimeter with the map's
---     background on the other side,
---   * more than one rendered country/coding unit sits on it, or
+-- the other side of this edge, and is it a different colour? -- is answered
+-- from the mesh as a whole rather than from the hexagons that happened to fall
+-- inside the request box. Counting only the countries a request actually
+-- renders, an edge is stroked when either
+--   * every hexagon on it lies on the same side of it, so it is a perimeter
+--     with the map's background on the other side, or
 --   * the hexagons on it carry more than one class.
--- Both read their counts out of `hex_border_sides`, so a tile cannot mistake the
+-- Both read `hex_border_sides`, so a tile cannot mistake the
 -- edge of its own request box for the edge of the map. Deriving them from what
 -- the box returned did exactly that: MapServer substitutes !BOX! with the extent
 -- of pixel *centres*, half a pixel smaller than the tile on every side, and the
 -- rim of the hexagons that came back was stroked as a dashed line along every
 -- tile seam.
 --
--- `hex_count` is how many of that country's own hexagons touch the edge. It is
--- normally one, and more where the country's own cells overlap -- which is what
--- keeps an edge interior to that country even when a second country also has a
--- cell on it, the Russia/Soviet Union case.
+-- `on_left` is which side of the edge, as stored, that country's hexagon lies
+-- on; a country with cells on both sides has a row for each. It is the side and
+-- not a count of hexagons that makes a perimeter, because a historical unit's
+-- cell lies on the very same cell of the present-day country beneath it: a
+-- coastal edge of Hamburg over Germany has two hexagons on it and still nothing
+-- on the sea side. Every hexagon is a CCW ring, so it walks each of its edges
+-- with itself on the left; an edge that had to be reversed to point the shared
+-- way has the hexagon on its right.
 --
 -- Matching edges by exact geometry is safe because the meshes come from
 -- ST_HexagonGrid, so hexagons of adjacent countries are cells of one global
@@ -966,7 +969,7 @@ WITH segments AS (
   SELECT
     hm.hex_size_m,
     hm.country_id,
-    (ST_DumpSegments(hm.geom)).geom AS geom
+    (ST_DumpSegments(ST_ForcePolygonCCW(hm.geom))).geom AS geom
   FROM demscore.hex_mesh hm
 ), directed AS (
   -- Two hexagons walk their shared edge in opposite directions, so each segment
@@ -979,13 +982,16 @@ WITH segments AS (
            <= (ST_X(ST_EndPoint(geom)), ST_Y(ST_EndPoint(geom)))
       THEN geom
       ELSE ST_Reverse(geom)
-    END AS geom
+    END AS geom,
+    (ST_X(ST_StartPoint(geom)), ST_Y(ST_StartPoint(geom)))
+      <= (ST_X(ST_EndPoint(geom)), ST_Y(ST_EndPoint(geom))) AS on_left
   FROM segments
 ), edges AS (
   SELECT
     hex_size_m,
     geom,
     array_agg(country_id) AS countries,
+    array_agg(on_left) AS on_left,
     count(*) AS hex_count,
     count(DISTINCT country_id) AS country_count
   FROM directed
@@ -995,7 +1001,8 @@ SELECT
   row_number() OVER () AS edge_id,
   hex_size_m,
   geom,
-  countries
+  countries,
+  on_left
 FROM edges
 WHERE country_count > 1
    OR hex_count = 1;
@@ -1013,14 +1020,13 @@ FROM hex_border_build;
 CREATE TABLE demscore.hex_border_sides (
   edge_id BIGINT NOT NULL REFERENCES demscore.hex_border_edges(id) ON DELETE CASCADE,
   country_id BIGINT NOT NULL REFERENCES demscore.countries(id) ON DELETE CASCADE,
-  hex_count INTEGER NOT NULL,
-  PRIMARY KEY (edge_id, country_id)
+  on_left BOOLEAN NOT NULL,
+  PRIMARY KEY (edge_id, country_id, on_left)
 );
 
-INSERT INTO demscore.hex_border_sides (edge_id, country_id, hex_count)
-SELECT b.edge_id, c, count(*)
-FROM hex_border_build b, unnest(b.countries) AS c
-GROUP BY b.edge_id, c;
+INSERT INTO demscore.hex_border_sides (edge_id, country_id, on_left)
+SELECT DISTINCT b.edge_id, s.country_id, s.on_left
+FROM hex_border_build b, unnest(b.countries, b.on_left) AS s (country_id, on_left);
 
 CREATE INDEX hex_border_edges_size_idx ON demscore.hex_border_edges (hex_size_m);
 CREATE INDEX hex_border_edges_geom_gix ON demscore.hex_border_edges USING GIST (geom);

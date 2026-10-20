@@ -15,15 +15,14 @@ The world box is `-17243960 -8392928 17243960 8392928`. Do not derive that by tr
 ## Layers
 
 - `hex_variable`: dynamic hexagons coloured by quantile class for a selected dataset variable and year.
-- `hex_outline`: the black stroke around each rendered colour area and around each rendered
-  country/coding-unit boundary. Colour decides whether same-country neighbouring hexagons are
-  interior, but different countries are still separated even when the legend paints them the
-  same shade. Request it by naming both layers
+- `hex_outline`: the black stroke around each rendered colour area. Only colour decides:
+  neighbouring hexagons in the same class are interior to one area whichever country each
+  belongs to, and all the no-data grey is one area. Request it by naming both layers
   (`LAYERS=hex_variable,hex_outline`); omit it to get the fills alone. It reads
   `demscore.hex_border_edges` and `demscore.hex_border_sides`, the precomputed table of every
   hexagon edge that could ever separate two colours together with the countries whose hexagons
-  touch each one, and ignores `polarity` -- that only changes the colour ramp, and cannot change
-  which sides match. Deciding an edge from the sides table rather than from the hexagons the
+  touch each one and on which side, and ignores `polarity` -- that only changes the colour
+  ramp, and cannot change which sides match. Deciding an edge from the sides table rather than from the hexagons the
   request box returned is deliberate: `!BOX!` is half a pixel smaller than the tile, so a
   per-request recomputation strokes the rim of its own box and dashes a line along every tile
   seam.

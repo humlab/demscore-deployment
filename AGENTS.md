@@ -142,11 +142,15 @@ The system turns tabular democracy indicator data into a thematic global hex map
      (below) stay out from under a historical unit drawn on the same ground
    - defines `demscore.hex_variable(...)` to join precomputed hex geometry with selected dataset values and compute quantile classes
 6. MapServer layer `hex_variable` calls `demscore.hex_variable(...)` dynamically using WMS params and applies bbox filtering inside the SQL subquery.
-   Layer `hex_outline` draws the black stroke around each rendered colour area and around each
-   rendered country/coding-unit boundary. It restricts `hex_border_sides` to the countries this
-   request renders and keeps edges that then carry a single hexagon (a perimeter, with the
-   background on the other side), more than one country/coding unit, or more than one class. The
-   client asks for it by naming both layers.
+   Layer `hex_outline` draws the black stroke around each rendered colour area -- areas of
+   colour, not countries: neighbours in the same class have no stroke between them whichever
+   country each belongs to, and all the no-data grey is one area. It restricts
+   `hex_border_sides` to the countries this request renders and keeps edges that then have
+   hexagons on one side only (a perimeter, with the background on the other side) or carry
+   more than one class. It counts sides, not hexagons, because a historical unit's cell lies on
+   the present-day cell beneath it, so a coast there has two hexagons on it. It once also
+   stroked every boundary between two countries, which made the "Outline equal values" switch
+   outline countries instead. The client asks for it by naming both layers.
    **No data is drawn.** A present-day (`natural_earth`) country with no value for the
    variable-year is drawn as grey hexagons, class 99 (`NO_DATA_COLOR` in
    `webapp/src/core/palettes.js`), and is outlined like any other area. It used to be left
@@ -466,8 +470,8 @@ Set cache toggle in `.env`:
   geometry, which holds because `ST_HexagonGrid` makes every country's mesh part of one global
   grid; a change that gave countries their own grids would silently leave every hexagon
   outlined on its own.
-- **The outline layers must read `hex_count` from `hex_border_sides`, never from the hexagons a
-  request returns.** MapServer substitutes `!BOX!` with the extent of pixel *centres*, half a
+- **The outline layers must read which sides are occupied from `hex_border_sides`
+  (`on_left`), never from the hexagons a request returns.** MapServer substitutes `!BOX!` with the extent of pixel *centres*, half a
   pixel smaller than the tile on every side, so a query that decides "nothing on the other
   side" from what its own box returned mistakes the rim of the box for the rim of the map and
   strokes a dashed line along every tile seam. `ST_Expand(!BOX!, %hex_size%)` in those layers

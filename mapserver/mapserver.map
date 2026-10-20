@@ -92,7 +92,7 @@ MAP
   #
   # The candidate edges come from demscore.hex_border_edges, precomputed per mesh,
   # with demscore.hex_border_sides naming every country whose hexagons touch each
-  # one and how many. Both are needed because CShapes historical countries overlay
+  # one and on which side. Both are needed because CShapes historical countries overlay
   # Natural Earth current ones -- several countries can touch the same grid edge,
   # and only some of them are rendered for a given year. Restricting the sides to
   # the rendered countries is what decides the edge, and it is a join rather than
@@ -115,10 +115,12 @@ MAP
   # honeycomb. What that costs is the coast of the part of it *not* overlaid,
   # which is rare: an overlay usually covers the country beneath it.
   #
-  # Class, not value, decides whether two sides are the same colour. Different
-  # rendered country/coding-unit ids are still stroked even when they share a
-  # class, so historical overlays do not make coastlines or split-country
-  # boundaries disappear when adjacent units happen to use the same shade.
+  # Class, not value, decides whether two sides are the same colour, and only
+  # colour does: two countries in the same class are one area with no stroke
+  # between them, and so is all the grey. A perimeter is an edge with rendered
+  # hexagons on one side only -- the side, not a count of hexagons, since a
+  # historical unit's cell lies on the present-day cell beneath it and a coast
+  # there has two hexagons on it and still only sea on the other side.
   LAYER
     NAME "hex_outline"
     TYPE LINE
@@ -129,7 +131,7 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (WITH scored AS MATERIALIZED (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), scores AS MATERIALIZED (SELECT country_id, class_idx FROM scored UNION ALL SELECT c.id, 99 FROM demscore.countries c WHERE c.source = 'natural_earth' AND c.iso_a3 IS DISTINCT FROM 'ATA' AND NOT EXISTS (SELECT 1 FROM scored s WHERE s.country_id = c.id) AND NOT EXISTS (SELECT 1 FROM demscore.hex_mesh_overlaps o JOIN scored s ON s.country_id = o.other_country_id WHERE o.country_id = c.id AND o.hex_size_m = %hex_size%)), box_edges AS MATERIALIZED (SELECT be.id, be.geom FROM demscore.hex_border_edges be WHERE be.hex_size_m = %hex_size% AND ST_Intersects(be.geom, ST_Expand(!BOX!, %hex_size%))), drawn AS (SELECT e.geom FROM box_edges e JOIN demscore.hex_border_sides sd ON sd.edge_id = e.id JOIN scores sc ON sc.country_id = sd.country_id GROUP BY e.id, e.geom HAVING sum(sd.hex_count) = 1 OR count(DISTINCT sd.country_id) > 1 OR min(sc.class_idx) <> max(sc.class_idx)) SELECT 1 AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 8857) AS geom FROM drawn HAVING count(*) > 0) AS ho USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (WITH scored AS MATERIALIZED (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), scores AS MATERIALIZED (SELECT country_id, class_idx FROM scored UNION ALL SELECT c.id, 99 FROM demscore.countries c WHERE c.source = 'natural_earth' AND c.iso_a3 IS DISTINCT FROM 'ATA' AND NOT EXISTS (SELECT 1 FROM scored s WHERE s.country_id = c.id) AND NOT EXISTS (SELECT 1 FROM demscore.hex_mesh_overlaps o JOIN scored s ON s.country_id = o.other_country_id WHERE o.country_id = c.id AND o.hex_size_m = %hex_size%)), box_edges AS MATERIALIZED (SELECT be.id, be.geom FROM demscore.hex_border_edges be WHERE be.hex_size_m = %hex_size% AND ST_Intersects(be.geom, ST_Expand(!BOX!, %hex_size%))), drawn AS (SELECT e.geom FROM box_edges e JOIN demscore.hex_border_sides sd ON sd.edge_id = e.id JOIN scores sc ON sc.country_id = sd.country_id GROUP BY e.id, e.geom HAVING count(DISTINCT sd.on_left) = 1 OR min(sc.class_idx) <> max(sc.class_idx)) SELECT 1 AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 8857) AS geom FROM drawn HAVING count(*) > 0) AS ho USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -223,7 +225,7 @@ MAP
       "init=epsg:3857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore"
-    DATA "geom FROM (WITH scores AS MATERIALIZED (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), box_edges AS MATERIALIZED (SELECT be.id, be.geom FROM demscore.hex_border_edges_mercator be WHERE be.hex_size_m = %hex_size% AND ST_Intersects(be.geom, ST_Expand(!BOX!, %hex_size%))), drawn AS (SELECT e.geom FROM box_edges e JOIN demscore.hex_border_sides_mercator sd ON sd.edge_id = e.id JOIN scores sc ON sc.country_id = sd.country_id GROUP BY e.id, e.geom HAVING sum(sd.hex_count) = 1 OR count(DISTINCT sd.country_id) > 1 OR min(sc.class_idx) <> max(sc.class_idx)) SELECT 1 AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 3857) AS geom FROM drawn HAVING count(*) > 0) AS ho USING UNIQUE id USING SRID=3857"
+    DATA "geom FROM (WITH scores AS MATERIALIZED (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), box_edges AS MATERIALIZED (SELECT be.id, be.geom FROM demscore.hex_border_edges_mercator be WHERE be.hex_size_m = %hex_size% AND ST_Intersects(be.geom, ST_Expand(!BOX!, %hex_size%))), drawn AS (SELECT e.geom FROM box_edges e JOIN demscore.hex_border_sides_mercator sd ON sd.edge_id = e.id JOIN scores sc ON sc.country_id = sd.country_id GROUP BY e.id, e.geom HAVING count(DISTINCT sd.on_left) = 1 OR min(sc.class_idx) <> max(sc.class_idx)) SELECT 1 AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 3857) AS geom FROM drawn HAVING count(*) > 0) AS ho USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
