@@ -190,8 +190,6 @@ Tab from the address bar and do not touch the mouse.
       credit line is a tab stop, not a mouse target, because it is where the CC BY-NC-SA and
       GPL-3.0 attribution is discharged. Enter opens the About dialog scrolled to *Map
       boundaries*, traps focus, and Escape closes it and returns focus to that button.
-- [ ] The table view's **Boundary** column sorts, and a historical row reads its source with
-      the years that outline is claimed for.
 - [ ] The **±** column reads as words, not as a shape: "Up 3 places from 2018", "Same
       position as 2018", "Not in the 2018 table". Its header announces "Change in position
       since the previous year" rather than "plus or minus".
