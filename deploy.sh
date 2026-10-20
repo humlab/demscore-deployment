@@ -16,6 +16,9 @@ usage() {
   echo ""
   echo "Commands:"
   echo "  install   Generate credentials, start services, and load all data"
+  echo "  import-data [--yes] [--preload N | --no-preload] [--verbose]"
+  echo "            Replace the data with the files in data/Demscore_Module_Vars,"
+  echo "            rebuild the map, print a summary, and offer to preload tiles"
   echo "  start     Start services (reads existing .env)"
   echo "  stop      Stop all services"
   echo "  status    Show service status"
@@ -50,6 +53,8 @@ set_env_var() {
   fi
 }
 
+# The host needs bash, curl and podman. Everything else -- Python, pdftotext,
+# Node, GDAL, psql -- runs in containers.
 check_deps() {
   local missing=()
   for cmd in podman curl; do
@@ -90,13 +95,10 @@ cmd_install() {
   echo "Starting services..."
   ./scripts/start_services.sh
 
+  # The same import `./deploy.sh import-data` runs, without asking first: on a
+  # first install there is no earlier data to replace.
   echo ""
-  echo "Loading datasets..."
-  ./scripts/load_demscore_module_vars.sh
-
-  echo ""
-  echo "Setting up MapServer and hex service..."
-  ./scripts/setup_mapserver_hex_service.sh
+  ./scripts/import_data.sh --yes "$@"
 
   router_port="$(grep '^DEMSCORE_ROUTER_PORT=' "$ENV_FILE" | cut -d'=' -f2- || true)"
   router_port="${router_port:-8090}"
@@ -105,6 +107,11 @@ cmd_install() {
   echo "Install complete."
   echo "  Web app:   http://127.0.0.1:${router_port}"
   echo "  MapServer: http://127.0.0.1:${router_port}/mapserver?map=/etc/mapserver/mapserver.map"
+}
+
+cmd_import_data() {
+  check_deps
+  ./scripts/import_data.sh "$@"
 }
 
 cmd_start() {
@@ -148,7 +155,8 @@ cmd_clear_map_tile_cache() {
 # ---------------------------------------------------------------------------
 
 case "${1:-}" in
-  install) cmd_install ;;
+  install) shift; cmd_install "$@" ;;
+  import-data) shift; cmd_import_data "$@" ;;
   start)   cmd_start ;;
   stop)    cmd_stop ;;
   status)  cmd_status ;;

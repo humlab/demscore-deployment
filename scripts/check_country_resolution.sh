@@ -158,7 +158,14 @@ ORDER BY 1, 2;"
 
 echo
 echo "=== Regression cases ==="
-regression_failures="$(psql_run -t -A -F'|' -c "
+# A case whose entity-year the source does not carry is skipped, not failed:
+# the cases are about where a coding unit is drawn, and a newer export that no
+# longer reaches back to Bavaria in 1800 has not drawn Bavaria wrongly. Each
+# skip is named, so a case that silently stopped testing anything is still
+# visible -- and a coding unit V-Dem merely renamed would surface anyway, as an
+# unresolved entity above. The import summary picks the skips up by their
+# "Skipped regression case:" prefix.
+regression_results="$(psql_run -t -A -c "
 WITH expected(dataset, source_name, year, want_country, want_geometry_source) AS (VALUES
   -- Palestine: three coding units whose territory moves under them.
   ('v_dem', 'Palestine/British Mandate', 1918, 'Palestine/British Mandate',     'cshapes_2.0_extended'),
@@ -227,15 +234,25 @@ WITH expected(dataset, source_name, year, want_country, want_geometry_source) AS
   FROM expected e
 )
 SELECT
+  CASE WHEN source_rows = 0 THEN 'skip|' || source_name || ' ' || year || ': not in the source data'
+  ELSE 'fail|' ||
   source_name || ' ' || year || ': expected ' ||
     COALESCE(want_country || ' on ' || want_geometry_source, want_geometry_source) ||
     ', got ' || COALESCE(COALESCE(got_country, '(nothing)') || ' on ' || COALESCE(got_geometry_source, '(nothing)'),
                          CASE WHEN unsupported_rows > 0 THEN 'intentionally_unsupported' ELSE '(nothing)' END)
+  END
 FROM actual
 WHERE source_rows = 0
    OR (want_country IS NOT NULL AND (got_country IS DISTINCT FROM want_country
                                      OR got_geometry_source IS DISTINCT FROM want_geometry_source))
    OR (want_country IS NULL AND (got_country IS NOT NULL OR unsupported_rows = 0));")"
+
+regression_skips="$(sed -n 's/^skip|//p' <<<"$regression_results")"
+regression_failures="$(sed -n 's/^fail|//p' <<<"$regression_results")"
+
+if [[ -n "$regression_skips" ]]; then
+  sed 's/^/Skipped regression case: /' <<<"$regression_skips"
+fi
 
 if [[ -n "$regression_failures" ]]; then
   echo "FAILED:" >&2
@@ -243,4 +260,8 @@ if [[ -n "$regression_failures" ]]; then
   exit 1
 fi
 
-echo "All regression cases pass."
+if [[ -n "$regression_skips" ]]; then
+  echo "Every regression case the source still carries passes."
+else
+  echo "All regression cases pass."
+fi

@@ -15,10 +15,27 @@ The system turns tabular democracy indicator data into a thematic global hex map
 
 ## 2) Architecture and Data Flow
 
+0. `./deploy.sh import-data` (`scripts/import_data.sh`) runs steps 2-7 below as one
+   import: it checks the files first (`scripts/import_data_report.py preflight`, which
+   changes nothing and fails on anything that would break the load), backs up the data
+   tables, runs the CSV load, the codebook load and the map setup, prints a summary, and
+   offers a tile preload. A map setup that fails on the new data restores the backup.
+   `./deploy.sh install` runs the same import. Each run's logs, the facts it collected
+   and its summary are kept in `state/imports/<run id>/`
 1. CSV datasets are mounted into the DB container from `data/Demscore_Module_Vars`.
 2. `scripts/load_demscore_module_vars.sh` loads CSVs into a typed long-format model:
    - `demscore.variables` (`dataset`, `variable`)
    - `demscore.dataset_values` (`variable_id`, `year`, `iso3`, `country_name`, `value`, `country_id`)
+   - `demscore.import_source_report` (one row per dataset: rows, columns, years, countries)
+     and `demscore.import_column_report` (one row per CSV column, with its `outcome`:
+     `identifier`, `imported`, `dropped_not_numeric`, `dropped_no_values`,
+     `dropped_redundant` or `hidden_superseded`, and a `detail` saying why) record what the
+     load did. They are rebuilt by every load and are what the import summary reads. The
+     load is one transaction, and it raises -- rolling everything back -- when a dataset
+     would be left with no visible variable
+   - a cell spelled `NA`, `NaN`, `N/A` or `.` is read as empty (`NA_TOKENS`), a UTF-8 BOM
+     and quoted header names are tolerated, and a year written `2020.0` is a year. Each of
+     these used to be a way for one oddly written export to drop every column
    - every `u_`-prefixed CSV column is an identifier (country, year, and the various country
      code systems), not an indicator, and is excluded from the melt; excluding only the three
      read by name once let `u_vdem_country_year_country_id` and friends become variables
@@ -188,16 +205,31 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - Spatial server: MapServer 8.4 (`camptocamp/mapserver:8.4`)
 - Web server: Nginx 1.27 Alpine (`nginx:1.27-alpine`)
 - Frontend: Vanilla JS + OpenLayers 10.10.0 + proj4 2.22.0 + static HTML/CSS
-- GIS import tooling: `ogr2ogr` (required by setup script)
+- GIS import tooling: `ogr2ogr`, in the `gdal` container
+- Script helpers: Python 3, poppler's `pdftotext` and Node, in the `tools` container
+  (`tools/Containerfile`, `localhost/demscore-tools:1`). The host needs bash, curl and
+  podman and nothing else; nothing on the deploy path may call Python, Node, pdftotext,
+  `psql` or `ogr2ogr` on the host
 
 ## 4) Repository Map
 
 - `compose.yml`: service definitions, ports, mounts, cache toggle wiring
 - `initdb/01_extensions.sql`: bootstrap PostGIS extensions
 - `scripts/load_demscore_module_vars.sh`: CSV-to-table loader
-- `deploy.sh`: the one way the stack is run, in every environment -- `install`, `start`,
-  `stop`, `status`, `preload`, `clear-map-tile-cache`. Documentation for whoever runs the
-  stack names this and nothing under `scripts/`
+- `deploy.sh`: the one way the stack is run, in every environment -- `install`,
+  `import-data`, `start`, `stop`, `status`, `preload`, `clear-map-tile-cache`.
+  Documentation for whoever runs the stack names this and nothing under `scripts/`
+- `scripts/import_data.sh`: what `./deploy.sh import-data` and `install` run -- check,
+  back up, load, codebooks, map, summary, preload offer (see section 2, step 0). It
+  collects what the summary needs from the database itself (`collect_db_facts`, one
+  JSON object), so the report script never connects to it
+- `scripts/import_data_report.py`: the preflight check of the export and the import
+  summary, run in the tools container. Its `DATASETS` table and its copy of the loader's
+  numeric rules must agree with `load_demscore_module_vars.sh`, which stays the authority
+- `scripts/lib/tools.sh`: `run_tool`, `tool_path`, `tool_tmpdir` -- how a script runs a
+  helper in the tools container. The repository is mounted at `/work`, so a tool can only
+  see paths inside it; scratch files go to `state/tmp/`
+- `state/` (git-ignored): import runs, the scratch space above, and `map_build_id`
 - `scripts/start_services.sh`: what `./deploy.sh start` and `install` run. Builds
   `webapp/dist`, starts every service, then calls `sync_db_password.sh`. `mapcache` is
   always started; `DEMSCORE_ENABLE_MAPCACHE` in `.env` decides whether it caches tiles or
@@ -206,7 +238,10 @@ The system turns tabular democracy indicator data into a thematic global hex map
   container, so a host needs podman and not Node. Run by `start_services.sh` before nginx starts,
   so a change under `webapp/` is served after the next `./deploy.sh start`: the `web` container
   serves `dist`, not the source. For rebuild-on-save while working on the client, `npm run dev`
-  in `webapp/` (see `webapp/README.md`)
+  in `webapp/` (see `webapp/README.md`). It passes `state/map_build_id` -- a fresh
+  timestamp written by every map setup run -- into the build, which stamps it into the
+  service worker's tile cache name (`MAP_BUILD_ID` in `webapp/sw.js`), so readers'
+  browsers drop the old tiles after an import or a mesh rebuild
 - `scripts/sync_db_password.sh`: `ALTER ROLE` over the trusted unix socket so the `demscore`
   role's password matches `POSTGRES_PASSWORD` in `.env`
 - `scripts/extract_variable_metadata.py`: robust parser for codebook text blocks and variable metadata fields
@@ -397,8 +432,8 @@ cut in — see the note above `hex_variable_mercator` in the mapfile.
 ### Prerequisites
 
 - `podman` + compose support
-- `ogr2ogr` on host PATH
 - `curl`
+- bash. Everything else runs in containers (`gdal`, `tools`, `node:20-alpine`)
 
 ### Typical startup
 
@@ -409,6 +444,7 @@ Set cache toggle in `.env`:
 - First time: `./deploy.sh install` -- generates `.env`, starts services, loads the
   datasets and sets up the map-ready DB objects
 - Thereafter: `./deploy.sh start`
+- New data: `./deploy.sh import-data` (see the README for what the files must look like)
 
 Setup, as part of `install`, also checks:
 
@@ -459,8 +495,17 @@ Setup, as part of `install`, also checks:
   nothing covers.** Setup will fail rather than ship a map whose universe silently differs
   from the source's; the check prints each entity with its years and value count, and the
   fix is a registry entry plus a `historical_registry` policy row, or an
-  `intentionally_unsupported` row. Rerunning `scripts/build_variable_coverage.sh` after
-  that is still required, since the coverage strips are derived from the same values.
+  `intentionally_unsupported` row. `./deploy.sh import-data` lists the unresolved
+  entities in its summary and restores the previous data; once the policy is written,
+  running it again rebuilds the coverage strips with everything else.
+- **A newer export may add and drop variables freely; the deploy path must keep coping.**
+  Nothing in the scripts may name a variable it then depends on: the setup smoke tests
+  pick their variable-year from the data, the regression cases in
+  `check_country_resolution.sh` skip (and name) an entity-year the source no longer
+  carries, the backend and client fall back when `defaultVariable` or a remembered
+  selection is gone, and the curated files under `webapp/config` (topics, polarity,
+  legend wording) are keyed by name but only ever enrich a variable. The import summary
+  lists what they no longer match and which new variables they do not cover yet.
 - `demscore.variable_metadata` is the UI-facing dictionary layer (human titles, citations, descriptions, provenance).
 - `demscore.variable_metadata_raw` is a refreshable staging table for parsed codebook output.
 - `demscore.hex_mesh` stores precomputed geometry for `hex_size` values 20000..300000 (step 5000).
@@ -607,7 +652,9 @@ Setup, as part of `install`, also checks:
 
 Before merging changes:
 
-1. Run setup smoke flow (`./scripts/setup_mapserver_hex_service.sh`).
+1. Run setup smoke flow (`./scripts/setup_mapserver_hex_service.sh`), or
+   `./deploy.sh import-data` if anything on the load path changed. Its smoke tests pick
+   the best-covered variable-year of each dataset from the data rather than naming one.
 2. Confirm `GetCapabilities` and one `GetMap` request succeed.
 3. Verify the web UI can switch dataset, variable, year, and hex size.
 4. Validate SQL changes with at least one query for each dataset (`qog`, `repdem`, `v_dem`).
@@ -686,8 +733,10 @@ Before merging changes:
 - **A rebuilt hex mesh invalidates every cached tile, and nothing in the URL says so.**
   Same trap as a colour change: the tiles carry the geometry, not a reference to it, so a
   setup run that moves a hexagon leaves the cache serving the old map. `setup_mapserver_hex_service.sh`
-  now clears the server cache when `DEMSCORE_ENABLE_MAPCACHE=1`; the browser's service
-  worker holds its own copy and needs a hard reload.
+  now clears the server cache when `DEMSCORE_ENABLE_MAPCACHE=1`, and writes a new
+  `state/map_build_id`, which renames the service worker's cache on the web app build that
+  follows, so browsers shed their copy on the next visit. A code change that repaints tiles
+  without a setup run still needs `WMS_TILE_CACHE` bumped by hand (see colour changes).
 - Each colour scheme has its own tile cache, because the scheme is in the request URL. That
   is what keeps them from serving each other's colours, but it also means the mapcache
   warm-up (`./deploy.sh --preload`) and the in-browser read-ahead cover one

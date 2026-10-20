@@ -23,6 +23,13 @@ DATASETS=("QoG" "REPDEM" "V-Dem")
 # as a real value of -22222, which is the failure -11111 was filtered for.
 MISSING_CODES="-11111, -22222"
 
+# Spellings of "no value" other than an empty cell. Demscore's exports leave the
+# cell empty, but one written out through R or Stata says NA or ".", and since a
+# single text cell drops its whole column (see not_numeric below), one such
+# export would take every indicator off the map. Compared case-insensitively,
+# after trimming; how many were seen is in the column report.
+NA_TOKENS="'na', 'nan', 'n/a', '.'"
+
 for dataset in "${DATASETS[@]}"; do
   csv_path="${BASE_DIR}/${dataset}/data.csv"
   if [[ ! -f "$csv_path" ]]; then
@@ -91,14 +98,59 @@ CREATE TABLE demscore.dataset_values (
   value DOUBLE PRECISION NOT NULL,
   country_id BIGINT
 );
+
+-- What the load found and what it did with it, for the summary
+-- scripts/import_data.sh prints. Rebuilt by every load, so it always describes
+-- the data that is in the tables beside it.
+DROP TABLE IF EXISTS demscore.import_source_report;
+CREATE TABLE demscore.import_source_report (
+  dataset TEXT PRIMARY KEY,
+  csv_rows BIGINT NOT NULL,
+  csv_columns INTEGER NOT NULL,
+  identifier_columns INTEGER NOT NULL,
+  rows_without_year BIGINT NOT NULL,
+  year_min INTEGER,
+  year_max INTEGER,
+  source_countries BIGINT NOT NULL
+);
+
+-- One row per CSV column. outcome is one of
+--   identifier          a u_ column: country, year or a country code
+--   imported            an indicator, now in demscore.variables
+--   dropped_not_numeric holds at least one value that is not a number
+--   dropped_no_values   nothing left once empty cells and missing codes go
+--   dropped_redundant   an exact copy of a twin that was kept
+--   hidden_superseded   kept, but left out of the variable list
+DROP TABLE IF EXISTS demscore.import_column_report;
+CREATE TABLE demscore.import_column_report (
+  dataset TEXT NOT NULL,
+  column_name TEXT NOT NULL,
+  column_position INTEGER NOT NULL,
+  outcome TEXT NOT NULL,
+  value_count BIGINT NOT NULL DEFAULT 0,
+  missing_code_cells BIGINT NOT NULL DEFAULT 0,
+  na_token_cells BIGINT NOT NULL DEFAULT 0,
+  detail TEXT,
+  PRIMARY KEY (dataset, column_name)
+);
 SQL
 
   for dataset in "${DATASETS[@]}"; do
     csv_path="${BASE_DIR}/${dataset}/data.csv"
     stage_name="stg_$(echo "$dataset" | tr '[:upper:]' '[:lower:]' | tr '-' '_')"
 
-    header="$(head -n 1 "$csv_path" | tr -d '\r')"
+    # A UTF-8 byte-order mark would otherwise become part of the first column's
+    # name, which then no longer starts with u_ and no longer matches the name
+    # the required-column check looks for. COPY skips the header line itself.
+    header="$(head -n 1 "$csv_path" | tr -d '\r' | sed $'1s/^\xEF\xBB\xBF//')"
     IFS=',' read -r -a columns <<< "$header"
+    # Names are plain identifiers (scripts/import_data_report.py checks that
+    # before a load), but a writer may still have quoted every one of them.
+    for i in "${!columns[@]}"; do
+      col="${columns[$i]}"
+      col="${col#\"}"
+      columns[$i]="${col%\"}"
+    done
     if [[ ${#columns[@]} -eq 0 ]]; then
       echo "No columns found in $csv_path" >&2
       exit 1
@@ -166,7 +218,9 @@ SQL
     done
     echo "${dataset}: excluding ${#excluded_cols[@]} identifier columns: ${excluded_cols[*]}" >&2
 
-    year_expr="CASE WHEN NULLIF(TRIM(s.\"${year_col}\"), '') ~ '^[0-9]{1,4}$' THEN NULLIF(TRIM(s.\"${year_col}\"), '')::INT ELSE NULL END"
+    # "2020.0" as well as "2020": a writer that went through a float column
+    # spells the year that way, and rejecting it would drop every row.
+    year_expr="CASE WHEN TRIM(s.\"${year_col}\") ~ '^[0-9]{1,4}(\\.0+)?\$' THEN TRIM(s.\"${year_col}\")::NUMERIC::INT ELSE NULL END"
     if [[ -n "$iso_col" ]]; then
       iso_expr="NULLIF(TRIM(s.\"${iso_col}\"), '')"
     else
@@ -183,89 +237,115 @@ SQL
     done
 
     cat <<SQL
-WITH extracted AS (
-  SELECT
-    '${dataset_key}'::TEXT AS dataset,
-    ${iso_expr} AS iso3,
-    NULLIF(TRIM(s."${country_col}"), '') AS country_name,
-    ${year_expr} AS year,
-    kv.key AS variable,
-    kv.value AS raw_value,
-    CASE
-      WHEN kv.value ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN kv.value::DOUBLE PRECISION
-      ELSE NULL
-    END AS value
-  FROM demscore.${stage_name} s
-  CROSS JOIN LATERAL (SELECT to_jsonb(s) AS row_json) src
-  CROSS JOIN LATERAL jsonb_each_text(src.row_json - ARRAY[${exclude_sql}]) kv
-), not_numeric AS (
-  -- A column is an indicator only if every value it has is a number. Casting
-  -- cell by cell let REPDEM's cab_composition2 through: a list of party IDs,
-  -- where a coalition ("10005,10004,10001") failed the cast and was dropped
-  -- while a single-party cabinet ("10005") passed as the number 10005. The
-  -- map then drew coalitions as no data and ranked party IDs into classes.
-  SELECT DISTINCT variable
-  FROM extracted
-  WHERE value IS NULL
-    AND NULLIF(TRIM(raw_value), '') IS NOT NULL
-), typed AS (
-  SELECT dataset, iso3, country_name, year, variable, value
-  FROM extracted
-  WHERE year IS NOT NULL
-    AND value IS NOT NULL
-    AND value NOT IN (${MISSING_CODES})
-    AND variable NOT IN (SELECT variable FROM not_numeric)
+-- What the export holds, before anything is filtered out of it.
+INSERT INTO demscore.import_source_report (
+  dataset, csv_rows, csv_columns, identifier_columns, rows_without_year,
+  year_min, year_max, source_countries
 )
+SELECT
+  '${dataset_key}',
+  count(*),
+  ${#columns[@]},
+  ${#excluded_cols[@]},
+  count(*) FILTER (WHERE (${year_expr}) IS NULL),
+  min(${year_expr}),
+  max(${year_expr}),
+  count(DISTINCT NULLIF(TRIM(s."${country_col}"), ''))
+FROM demscore.${stage_name} s;
+
+-- The melt, once: one row per (country-year, column) cell. Every step below
+-- reads this table rather than melting the staging table again.
+CREATE TEMP TABLE import_cells AS
+SELECT
+  ${iso_expr} AS iso3,
+  NULLIF(TRIM(s."${country_col}"), '') AS country_name,
+  ${year_expr} AS year,
+  kv.key AS variable,
+  c.raw_value,
+  CASE
+    WHEN c.raw_value ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN c.raw_value::DOUBLE PRECISION
+    ELSE NULL
+  END AS value,
+  COALESCE(lower(c.raw_value) IN (${NA_TOKENS}), FALSE) AS is_na_token
+FROM demscore.${stage_name} s
+CROSS JOIN LATERAL jsonb_each_text(to_jsonb(s) - ARRAY[${exclude_sql}]) kv
+CROSS JOIN LATERAL (SELECT NULLIF(btrim(kv.value), '') AS raw_value) c;
+
+-- A column is an indicator only if every value it has is a number. Casting
+-- cell by cell let REPDEM's cab_composition2 through: a list of party IDs,
+-- where a coalition ("10005,10004,10001") failed the cast and was dropped
+-- while a single-party cabinet ("10005") passed as the number 10005. The
+-- map then drew coalitions as no data and ranked party IDs into classes.
+CREATE TEMP TABLE import_column_stats AS
+SELECT
+  variable,
+  count(*) FILTER (WHERE raw_value IS NOT NULL AND value IS NULL AND NOT is_na_token) AS text_cells,
+  min(raw_value) FILTER (WHERE raw_value IS NOT NULL AND value IS NULL AND NOT is_na_token) AS text_example,
+  count(*) FILTER (WHERE is_na_token) AS na_token_cells,
+  count(*) FILTER (WHERE value IN (${MISSING_CODES})) AS missing_code_cells,
+  count(*) FILTER (
+    WHERE value IS NOT NULL AND value NOT IN (${MISSING_CODES}) AND year IS NOT NULL
+  ) AS usable_cells
+FROM import_cells
+GROUP BY variable;
+
 INSERT INTO demscore.variables (dataset, variable)
-SELECT DISTINCT dataset, variable
-FROM typed
+SELECT '${dataset_key}', variable
+FROM import_column_stats
+WHERE text_cells = 0
+  AND usable_cells > 0
+ORDER BY variable
 ON CONFLICT (dataset, variable) DO NOTHING;
 
-WITH extracted AS (
-  SELECT
-    '${dataset_key}'::TEXT AS dataset,
-    ${iso_expr} AS iso3,
-    NULLIF(TRIM(s."${country_col}"), '') AS country_name,
-    ${year_expr} AS year,
-    kv.key AS variable,
-    kv.value AS raw_value,
-    CASE
-      WHEN kv.value ~ '^[+-]?[0-9]*\\.?[0-9]+([eE][+-]?[0-9]+)?$' THEN kv.value::DOUBLE PRECISION
-      ELSE NULL
-    END AS value
-  FROM demscore.${stage_name} s
-  CROSS JOIN LATERAL (SELECT to_jsonb(s) AS row_json) src
-  CROSS JOIN LATERAL jsonb_each_text(src.row_json - ARRAY[${exclude_sql}]) kv
-), not_numeric AS (
-  -- A column is an indicator only if every value it has is a number. Casting
-  -- cell by cell let REPDEM's cab_composition2 through: a list of party IDs,
-  -- where a coalition ("10005,10004,10001") failed the cast and was dropped
-  -- while a single-party cabinet ("10005") passed as the number 10005. The
-  -- map then drew coalitions as no data and ranked party IDs into classes.
-  SELECT DISTINCT variable
-  FROM extracted
-  WHERE value IS NULL
-    AND NULLIF(TRIM(raw_value), '') IS NOT NULL
-), typed AS (
-  SELECT dataset, iso3, country_name, year, variable, value
-  FROM extracted
-  WHERE year IS NOT NULL
-    AND value IS NOT NULL
-    AND value NOT IN (${MISSING_CODES})
-    AND variable NOT IN (SELECT variable FROM not_numeric)
-)
 INSERT INTO demscore.dataset_values (variable_id, year, iso3, country_name, value, country_id)
 SELECT
   v.id,
-  t.year,
-  t.iso3,
-  t.country_name,
-  t.value,
+  c.year,
+  c.iso3,
+  c.country_name,
+  c.value,
   NULL
-FROM typed t
+FROM import_cells c
 JOIN demscore.variables v
-  ON v.dataset = t.dataset
- AND v.variable = t.variable;
+  ON v.dataset = '${dataset_key}'
+ AND v.variable = c.variable
+WHERE c.year IS NOT NULL
+  AND c.value IS NOT NULL
+  AND c.value NOT IN (${MISSING_CODES});
+
+INSERT INTO demscore.import_column_report (
+  dataset, column_name, column_position, outcome,
+  value_count, missing_code_cells, na_token_cells, detail
+)
+SELECT
+  '${dataset_key}',
+  c.column_name,
+  c.ordinal_position::INTEGER,
+  CASE
+    WHEN c.column_name LIKE 'u\\_%' THEN 'identifier'
+    WHEN st.text_cells > 0 THEN 'dropped_not_numeric'
+    WHEN v.id IS NOT NULL THEN 'imported'
+    ELSE 'dropped_no_values'
+  END,
+  COALESCE(st.usable_cells, 0),
+  COALESCE(st.missing_code_cells, 0),
+  COALESCE(st.na_token_cells, 0),
+  CASE
+    WHEN c.column_name LIKE 'u\\_%' THEN NULL
+    WHEN st.text_cells > 0
+      THEN format('%s text value(s), e.g. "%s"', st.text_cells, left(st.text_example, 40))
+    WHEN v.id IS NULL AND COALESCE(st.missing_code_cells, 0) > 0
+      THEN format('only missing codes (%s cell(s))', st.missing_code_cells)
+    WHEN v.id IS NULL THEN 'no values'
+  END
+FROM information_schema.columns c
+LEFT JOIN import_column_stats st
+  ON st.variable = c.column_name
+LEFT JOIN demscore.variables v
+  ON v.dataset = '${dataset_key}'
+ AND v.variable = c.column_name
+WHERE c.table_schema = 'demscore'
+  AND c.table_name = '${stage_name}';
 
 -- Name the melted columns that were not registered, so a column left out for
 -- holding text or emptied by MISSING_CODES shows up in the load log instead of
@@ -274,24 +354,18 @@ DO \$\$
 DECLARE
   empty_cols TEXT;
 BEGIN
-  SELECT string_agg(c.column_name, ', ' ORDER BY c.column_name)
+  SELECT string_agg(column_name, ', ' ORDER BY column_name)
     INTO empty_cols
-  FROM information_schema.columns c
-  WHERE c.table_schema = 'demscore'
-    AND c.table_name = '${stage_name}'
-    AND c.column_name NOT LIKE 'u\\_%'
-    AND NOT EXISTS (
-      SELECT 1
-      FROM demscore.variables v
-      WHERE v.dataset = '${dataset_key}'
-        AND v.variable = c.column_name
-    );
+  FROM demscore.import_column_report
+  WHERE dataset = '${dataset_key}'
+    AND outcome LIKE 'dropped\\_%';
   IF empty_cols IS NOT NULL THEN
     RAISE NOTICE '%: dropped column(s) that are not wholly numeric or hold only missing codes: %', '${dataset_key}', empty_cols;
   END IF;
 END
 \$\$;
 
+DROP TABLE import_cells, import_column_stats;
 DROP TABLE demscore.${stage_name};
 SQL
   done
@@ -361,10 +435,19 @@ BEGIN
       IF extra = 0 THEN
         -- Cascades to dataset_values.
         DELETE FROM demscore.variables WHERE id = twin.drop_id;
+        UPDATE demscore.import_column_report
+           SET outcome = 'dropped_redundant',
+               detail = format('exact copy of rows in %s', twin.keep_variable)
+         WHERE dataset = rule.dataset
+           AND column_name = twin.drop_variable;
         dropped := dropped + 1;
       ELSE
         RAISE WARNING '%: keeping % — % row(s) of it are not in %',
           rule.dataset, twin.drop_variable, extra, twin.keep_variable;
+        UPDATE demscore.import_column_report
+           SET detail = format('kept beside its twin %s: %s row(s) differ', twin.keep_variable, extra)
+         WHERE dataset = rule.dataset
+           AND column_name = twin.drop_variable;
       END IF;
     END LOOP;
 
@@ -435,6 +518,11 @@ BEGIN
         );
 
       UPDATE demscore.variables SET hidden = TRUE WHERE id = twin.hide_id;
+      UPDATE demscore.import_column_report
+         SET outcome = 'hidden_superseded',
+             detail = format('superseded by %s; %s country-year cell(s) only here', twin.keep_variable, orphans)
+       WHERE dataset = rule.dataset
+         AND column_name = twin.hide_variable;
       hidden_vars := hidden_vars + 1;
       hidden_cells := hidden_cells + orphans;
     END LOOP;
@@ -445,8 +533,31 @@ BEGIN
 END
 $$;
 
+-- A dataset with nothing left in its variable list would reach the web client
+-- as a chip that opens onto no variables, and the map would have nothing to
+-- draw for it. That is an export gone wrong (a different delimiter, every
+-- column turned to text), not a selection anybody made, so the whole load
+-- rolls back and the previous data stays where it is.
+DO $$
+DECLARE
+  empty_datasets TEXT;
+BEGIN
+  SELECT string_agg(r.dataset, ', ' ORDER BY r.dataset)
+    INTO empty_datasets
+  FROM demscore.import_source_report r
+  WHERE NOT EXISTS (
+    SELECT 1 FROM demscore.variables v
+    WHERE v.dataset = r.dataset AND NOT v.hidden
+  );
+  IF empty_datasets IS NOT NULL THEN
+    RAISE EXCEPTION 'No indicator column survived the load for: %. Nothing was changed; the column outcomes are in the notices above.', empty_datasets;
+  END IF;
+END
+$$;
+
 ANALYZE demscore.variables;
 ANALYZE demscore.dataset_values;
+ANALYZE demscore.import_column_report;
 
 COMMIT;
 SQL

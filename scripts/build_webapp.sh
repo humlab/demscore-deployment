@@ -25,11 +25,22 @@ if [[ ! -f "${WEBAPP_DIR}/package.json" ]]; then
   exit 1
 fi
 
-echo "Building web app bundle in ${NODE_IMAGE}..."
+# Which map setup run drew the tiles (written by
+# scripts/setup_mapserver_hex_service.sh). The build stamps it into the service
+# worker's tile cache name, so a reader's browser drops tiles of the previous
+# data or mesh instead of serving them under unchanged URLs forever. Absent
+# before the first setup, and then the name is the bare version.
+MAP_BUILD_ID=""
+if [[ -f "${ROOT_DIR}/state/map_build_id" ]]; then
+  MAP_BUILD_ID="$(tr -cd 'A-Za-z0-9-' < "${ROOT_DIR}/state/map_build_id")"
+fi
+
+echo "Building web app bundle in ${NODE_IMAGE}${MAP_BUILD_ID:+ (map build ${MAP_BUILD_ID})}..."
 # `npm ci`, not `npm install`: the lockfile is committed, and a server build
 # should install exactly what it says rather than quietly updating it.
 podman run --rm \
   -v "${WEBAPP_DIR}:/app" \
   -w /app \
+  -e DEMSCORE_MAP_BUILD_ID="$MAP_BUILD_ID" \
   "$NODE_IMAGE" \
   sh -c "npm ci --no-audit --no-fund && npm run build"

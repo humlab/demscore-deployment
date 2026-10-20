@@ -78,6 +78,15 @@ if [[ ! -f "$CUSTOM_HISTORICAL_FILE" ]]; then
   exit 1
 fi
 
+# Every run of this script repaints the tiles -- new data, a rebuilt mesh --
+# under URLs that do not change, so the browsers' tile cache has to be told.
+# The id written here is stamped into the service worker's cache name when
+# start_services.sh rebuilds the web app just below (scripts/build_webapp.sh),
+# and a renamed cache is the only thing that makes a browser drop the old one.
+# The server-side cache is emptied further down.
+mkdir -p "${ROOT_DIR}/state"
+date -u +%Y%m%dT%H%M%SZ > "${ROOT_DIR}/state/map_build_id"
+
 echo "Starting services..."
 "${ROOT_DIR}/scripts/start_services.sh"
 
@@ -213,17 +222,52 @@ fi
 echo "Checking that every source observation has a resolution..."
 "${ROOT_DIR}/scripts/check_country_resolution.sh"
 
+# One variable-year per dataset, picked from the data rather than named here:
+# the visible variable-year with the most mapped countries. A newer export that
+# no longer carries a variable this check once named would otherwise fail setup
+# for a reason that has nothing to do with the map.
+echo "Picking a variable-year to test for each dataset..."
+smoke_cases="$(podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -At -F'|' -c "
+SELECT DISTINCT ON (v.dataset) v.dataset, v.variable, dv.year
+FROM demscore.dataset_values dv
+JOIN demscore.variables v ON v.id = dv.variable_id
+WHERE NOT v.hidden
+  AND dv.country_id IS NOT NULL
+GROUP BY v.dataset, v.variable, dv.year
+ORDER BY v.dataset, count(*) DESC, dv.year DESC, v.variable;")"
+
 echo "Validating map function outputs..."
+for dataset in qog repdem v_dem; do
+  if ! grep -q "^${dataset}|" <<<"$smoke_cases"; then
+    echo "${dataset} has no value on any country the map can draw, so there is nothing to test it with." >&2
+    exit 1
+  fi
+done
+# dataset|variable|year lines as a VALUES list. The names are safe to inline:
+# the import's preflight allows nothing but [A-Za-z0-9_] in a column name.
+smoke_values="$(sed -E "s/^([^|]+)\|([^|]+)\|([0-9]+)$/('\1','\2',\3),/" <<<"$smoke_cases" | tr -d '\n')"
+smoke_values="${smoke_values%,}"
 podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -c "
 SELECT
-  dataset,
-  variable,
-  year,
-  count(*) AS hex_count,
-  min(value) AS min_value,
-  max(value) AS max_value
-FROM demscore.hex_variable('v_dem','v2x_polyarchy',2020,200000)
-GROUP BY dataset, variable, year;"
+  t.dataset,
+  t.variable,
+  t.year,
+  count(h.*) AS hex_count,
+  min(h.value) AS min_value,
+  max(h.value) AS max_value
+FROM (VALUES ${smoke_values}) AS t(dataset, variable, year)
+LEFT JOIN LATERAL demscore.hex_variable(t.dataset, t.variable, t.year, 200000) h ON TRUE
+GROUP BY t.dataset, t.variable, t.year
+ORDER BY t.dataset;"
+
+empty_cases="$(podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -At -c "
+SELECT string_agg(t.dataset || '.' || t.variable || ' ' || t.year, ', ')
+FROM (VALUES ${smoke_values}) AS t(dataset, variable, year)
+WHERE NOT EXISTS (SELECT 1 FROM demscore.hex_variable(t.dataset, t.variable, t.year, 200000));")"
+if [[ -n "$empty_cases" ]]; then
+  echo "demscore.hex_variable() drew no hexagons for: ${empty_cases}" >&2
+  exit 1
+fi
 
 echo "Precomputing variable coverage strips for the variable list..."
 "${ROOT_DIR}/scripts/build_variable_coverage.sh"
@@ -243,20 +287,23 @@ curl -sS "http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver
 # Requested exactly the way the web app requests it -- WMS 1.1.1, SRS rather
 # than CRS, and the full Equal Earth world box -- so a mapfile that only renders
 # under some other projection or axis order fails here rather than in a browser.
-echo "Validating WMS GetMap (EPSG:8857)..."
-map_response="$(curl -sS -o /tmp/demscore_hex_test.png -w '%{http_code} %{content_type} %{size_download}' "http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000")"
-echo "$map_response"
-case "$map_response" in
-  200\ image/png*) ;;
-  *) echo "GetMap did not return a PNG -- the mapfile or the hex mesh is not serving Equal Earth." >&2; exit 1 ;;
-esac
+while IFS='|' read -r dataset variable year; do
+  example_getmap="http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=100000"
+  echo "Validating WMS GetMap (EPSG:8857) for ${dataset}.${variable} ${year}..."
+  map_response="$(curl -sS -o /tmp/demscore_hex_test.png -w '%{http_code} %{content_type} %{size_download}' "$example_getmap")"
+  echo "$map_response"
+  case "$map_response" in
+    200\ image/png*) ;;
+    *) echo "GetMap did not return a PNG -- the mapfile or the hex mesh is not serving Equal Earth." >&2; exit 1 ;;
+  esac
+done <<<"$smoke_cases"
 
 echo
 cat <<EOF
 Setup complete.
 
 Example GetMap request:
-http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000
+${example_getmap}
 
 Web app:
 http://127.0.0.1:${ROUTER_PORT}/
