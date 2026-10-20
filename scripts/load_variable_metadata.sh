@@ -64,7 +64,10 @@ run_tool python3 scripts/extract_variable_metadata.py \
   --input "$(tool_path "$vdem_txt")::data/Demscore_Module_Vars/V-Dem/codebook.pdf"
 
 echo "Copying parsed metadata into DB container..."
-podman compose cp "$raw_csv" db:/tmp/variable_metadata_raw.csv
+# Streamed through `exec` rather than `compose cp`: the Compose v1
+# docker-compose that some servers run as podman's provider has no `cp`, and
+# answers it with its help text and a failure.
+podman compose exec -T db sh -c 'cat > /tmp/variable_metadata_raw.csv' < "$raw_csv"
 
 echo "Loading variable metadata into PostgreSQL..."
 podman compose exec -T db psql -U demscore -d demscore -v ON_ERROR_STOP=1 -f - <<'SQL'

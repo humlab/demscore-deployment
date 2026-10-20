@@ -11,11 +11,19 @@
 TOOLS_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 run_tool() {
-  # podman's compose wrapper adds "Error: executing <provider> ... exit status N"
-  # whenever the tool exits non-zero, which reads as a crash under a tool that
-  # has just said what it found wrong. The exit status is kept; only that line goes.
-  (cd "$TOOLS_ROOT_DIR" && podman compose --profile setup run --rm --no-deps -T tools "$@" \
-    2> >(grep -v '^Error: executing .* exit status [0-9]*$' >&2))
+  # What a compose run says about itself rather than about the tool, dropped so
+  # it does not land in the middle of a report: podman's wrapper adds "Error:
+  # executing <provider> ... exit status N" whenever the tool exits non-zero,
+  # and ">>>> Executing external compose provider ... <<<<" (plus a blank line)
+  # before every call unless told not to; Compose v1 adds "Creating
+  # <project>_tools_run ... done". The tool's own stderr and the exit status
+  # are kept.
+  (cd "$TOOLS_ROOT_DIR" && PODMAN_COMPOSE_WARNING_LOGS=false \
+    podman compose --profile setup run --rm --no-deps -T tools "$@" \
+    2> >(grep -Ev -e '^Error: executing .* exit status [0-9]+[[:space:]]*$' \
+                  -e '^>>>> Executing external compose provider .*<<<<[[:space:]]*$' \
+                  -e '^Creating [^ ]+_run( \.\.\.( done)?)?[[:space:]]*$' \
+                  -e '^[[:space:]]*$' >&2))
 }
 
 tool_path() {
