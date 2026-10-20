@@ -36,8 +36,9 @@ the year moves is what a modal could not be.
 
 **The reader picks the scheme.** Which colours work is not one question with one answer —
 about one man in twelve cannot use the red-green channel, a diverging ramp always has two
-classes that print as the same grey, and a projector flattens saturation — so *Colours* in
-the bottom-left map controls offers two, and the choice is kept in a cookie.
+classes that print as the same grey, and a projector flattens saturation — so the
+*Colours* button at the end of the legend (or a click on the ramp itself) offers two, and
+the choice is kept in a cookie.
 
 | scheme | kind | what it is for |
 |---|---|---|
@@ -93,8 +94,8 @@ Colour is still not the only channel, which matters most in the two diverging sc
   swatches all draw a visible ring now; the range input's ring is drawn on the marker,
   because the input itself is invisible and covers the whole timeline.
 - Tab order follows the visible layout: sidebar → timeline (top of the map) → the map's own
-  controls → the dashboard at the foot of it, which holds the View switch, the colour
-  picker, the outline toggle and the legend. `#timeline-overlay` sits before
+  controls → the dashboard at the foot of it, which holds the View switch, the legend
+  with the colour picker at its end, and the outline toggle. `#timeline-overlay` sits before
   `<main id="map">` in the source for that reason, though it is painted over it.
 - The variable info card is a non-modal `dialog` when it is opened by a click — with a name,
   a close button, a focus moved into it and a focus given back — and a `tooltip` when it is
@@ -122,7 +123,7 @@ Tab from the address bar and do not touch the mouse.
 - [ ] The order runs: About → hide side panel → search box → topic chips → dataset chips →
       variable list → play → speed → year slider → zoom + / − →
       attribution → map only → **View** (one stop) → the seven legend swatches →
-      **Colours** → outline switch → hide map controls. The map dashboard is one row, so the
+      **Colours** (the button at the legend's end) → outline switch → hide map controls. The map dashboard is one row, so the
       order is the visible layout, left to right.
 - [ ] Type in the search box; the list narrows and the summary under the chips updates.
       Escape empties the box and restores the full list.
@@ -158,7 +159,7 @@ Tab from the address bar and do not touch the mouse.
 - [ ] "Show only the map" hides the panels and leaves the map, itself and the credit line;
       Enter on it again, or Escape, brings everything back.
 - [ ] The *Colours* button announces "Colours" and the scheme on screen ("Colours Brown –
-      Blue"). Enter, Space or an arrow opens the list and focus goes into it; Up/Down move
+      Blue"), though it shows only an icon. Enter, Space or an arrow opens the list and focus goes into it; Up/Down move
       through the schemes, each announced by name and as selected or not; Enter picks one,
       closes the list and puts focus back on the button; Escape closes it without picking
       (and must not also leave map-only). Each scheme repaints the hexagons and the legend
