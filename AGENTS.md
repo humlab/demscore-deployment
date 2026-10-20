@@ -195,16 +195,18 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `compose.yml`: service definitions, ports, mounts, cache toggle wiring
 - `initdb/01_extensions.sql`: bootstrap PostGIS extensions
 - `scripts/load_demscore_module_vars.sh`: CSV-to-table loader
-- `scripts/start_services.sh`: builds `webapp/dist`, starts every service, then calls
-  `sync_db_password.sh`. The one start path for every environment -- `./deploy.sh start` and
-  `install` call it, and it was named `dev_up.sh` until that name was found to suggest it was
-  for development only. `mapcache` is always started; `DEMSCORE_ENABLE_MAPCACHE` in `.env`
-  decides whether it caches tiles or passes them straight through. A bare `podman compose
-  up -d` starts the same containers but skips the build and the password sync
+- `deploy.sh`: the one way the stack is run, in every environment -- `install`, `start`,
+  `stop`, `status`, `preload`, `clear-map-tile-cache`. Documentation for whoever runs the
+  stack names this and nothing under `scripts/`
+- `scripts/start_services.sh`: what `./deploy.sh start` and `install` run. Builds
+  `webapp/dist`, starts every service, then calls `sync_db_password.sh`. `mapcache` is
+  always started; `DEMSCORE_ENABLE_MAPCACHE` in `.env` decides whether it caches tiles or
+  passes them straight through
 - `scripts/build_webapp.sh`: builds `webapp/dist` (webpack) inside a throwaway `node:20-alpine`
-  container, so a host needs podman and not Node. Run by `start_services.sh` before nginx starts, and
-  the one step any change under `webapp/` needs before it is served: the `web` container
-  serves `dist`, not the source
+  container, so a host needs podman and not Node. Run by `start_services.sh` before nginx starts,
+  so a change under `webapp/` is served after the next `./deploy.sh start`: the `web` container
+  serves `dist`, not the source. For rebuild-on-save while working on the client, `npm run dev`
+  in `webapp/` (see `webapp/README.md`)
 - `scripts/sync_db_password.sh`: `ALTER ROLE` over the trusted unix socket so the `demscore`
   role's password matches `POSTGRES_PASSWORD` in `.env`
 - `scripts/extract_variable_metadata.py`: robust parser for codebook text blocks and variable metadata fields
@@ -404,14 +406,11 @@ Set cache toggle in `.env`:
 - `DEMSCORE_ENABLE_MAPCACHE=0` (no server/browser tile cache)
 - `DEMSCORE_ENABLE_MAPCACHE=1` (enable server/browser tile cache)
 
-1. Start services:
-   - `./scripts/start_services.sh`
-2. Load datasets:
-   - `./scripts/load_demscore_module_vars.sh`
-3. Setup map-ready DB objects and smoke tests:
-   - `./scripts/setup_mapserver_hex_service.sh`
+- First time: `./deploy.sh install` -- generates `.env`, starts services, loads the
+  datasets and sets up the map-ready DB objects
+- Thereafter: `./deploy.sh start`
 
-`setup_mapserver_hex_service.sh` also checks:
+Setup, as part of `install`, also checks:
 
 - DB readiness
 - function result sanity
@@ -675,7 +674,7 @@ Before merging changes:
   trusts. The mismatch surfaces only where a container connects over TCP, which
   scram-sha-256 guards -- `ogr2ogr` in the setup script first, then `mapserver` and
   `web-backend` -- as `password authentication failed for user "demscore"`.
-  `scripts/sync_db_password.sh`, run on every `start_services.sh`, reconciles the two.
+  `scripts/sync_db_password.sh`, run on every `./deploy.sh start`, reconciles the two.
 - No automated test suite currently exists; scripts provide operational smoke tests only.
 - The map is a WMS image, so nothing in it can be reached by assistive technology. The
   non-visual equivalent -- `#mapSummary` and `#mapAnnouncer` in
@@ -691,12 +690,12 @@ Before merging changes:
   worker holds its own copy and needs a hard reload.
 - Each colour scheme has its own tile cache, because the scheme is in the request URL. That
   is what keeps them from serving each other's colours, but it also means the mapcache
-  warm-up (`scripts/preload_mapcache_tiles.sh`) and the in-browser read-ahead cover one
+  warm-up (`./deploy.sh --preload`) and the in-browser read-ahead cover one
   scheme at a time: switching schemes is a cold cache until it refills. Blue-Red (`default`)
   sends no `palette` parameter at all, as it always has. The reader's default became
   Indigo-amber at the client's request, and it is named in every request, so the tiles a
   reader who never touches the control gets are the `palette=indigo_amber` ones -- which is
-  what `preload_mapcache_tiles.sh` now warms first.
+  what `./deploy.sh --preload` now warms first.
 - Only two schemes are offered: Indigo-amber and Blue-Red. Viridis and Cividis were withdrawn
   from the picker at the client's request (`offered: false` in `palettes.js`; still generated
   and served). Both offered schemes are diverging and non-monotonic in lightness, each with

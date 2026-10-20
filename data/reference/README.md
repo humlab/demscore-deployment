@@ -1,9 +1,9 @@
 # Reference geometry
 
 Everything the map is drawn on. Upstream files are vendored verbatim and
-imported by `scripts/setup_mapserver_hex_service.sh`, which downloads anything
-missing. Files under `custom/` are project-local approximations and are marked
-as such in the registry.
+imported by `./deploy.sh install`, which downloads anything missing. Files
+under `custom/` are project-local approximations and are marked as such in the
+registry.
 
 | File | Role | Licence |
 | --- | --- | --- |

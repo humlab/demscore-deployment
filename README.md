@@ -45,8 +45,8 @@ old map instead of replacing it:
 Both reach the server cache only. A reader's browser keeps its own copy behind
 the service worker, which is keyed by URL and shed only when the cache's *name*
 changes, so bump `WMS_TILE_CACHE` in `webapp/sw.js` for that — a reload alone
-will not do it. (`scripts/setup_mapserver_hex_service.sh` already clears the
-server cache itself when caching is enabled, since it rebuilds the mesh.)
+will not do it. (`./deploy.sh install` already clears the server cache itself
+when caching is enabled, since it rebuilds the mesh.)
 
 To enable server/browser WMS tile caching, set `DEMSCORE_ENABLE_MAPCACHE=1`
 in `.env` before starting. `DEMSCORE_MAPCACHE_MAX_SIZE` (default `100g`)
@@ -69,12 +69,11 @@ it's re-rendered from the database.
   ordinary usage stays far below that, but the 100 GB default is sized to
   comfortably hold most of what real traffic would ever request. Use
   `./deploy.sh --preload N` for a bounded warm-up of the first `N` zoom levels.
-- No automated test suite exists yet; `scripts/setup_mapserver_hex_service.sh`
-  provides operational smoke tests (DB readiness, WMS `GetCapabilities` and
-  `GetMap`), and `scripts/check_country_resolution.sh` checks that every source
-  observation is either drawn on the map or explicitly refused. Setup fails on
-  a source country nothing covers, which is what a newer dataset export is most
-  likely to introduce.
+- No automated test suite exists yet; `./deploy.sh install` ends with
+  operational smoke tests (DB readiness, WMS `GetCapabilities` and `GetMap`)
+  and checks that every source observation is either drawn on the map or
+  explicitly refused. It fails on a source country nothing covers, which is
+  what a newer dataset export is most likely to introduce.
 - **This deployment is non-commercial, and has to be.** Two of the four boundary
   sources are CC BY-NC-SA 4.0, which permits no commercial use, and the hex
   meshes and rendered tiles are derivatives of them — so no advertising, no paid
@@ -84,15 +83,14 @@ it's re-rendered from the database.
   would have to be reduced to the Natural Earth rows, losing every pre-1886
   country. `data/reference/README.md` is the full licence and citation register;
   read it before redistributing the database, the tiles or the rendered map.
-- The credits the app shows are generated, not written:
-  `scripts/build_attribution.sh` reads which geometry is actually drawn out of
-  `demscore.countries`, joins it to the hand-maintained register in
-  `webapp/config/attribution_sources.json`, and **fails** on a boundary source
-  the register cannot name. Setup runs it, so a new source reaches the credits
-  or it does not ship.
+- The credits the app shows are generated, not written: `./deploy.sh install`
+  reads which geometry is actually drawn out of `demscore.countries`, joins it
+  to the hand-maintained register in `webapp/config/attribution_sources.json`,
+  and **fails** on a boundary source the register cannot name, so a new source
+  reaches the credits or it does not ship.
 - `country_polygon_considerations.md` records what the country geometry is and
   where it is approximate — worth reading before quoting the map on a country
   that no longer exists.
 - `POSTGRES_PASSWORD` is only applied the first time the `pg_data` volume is
-  created. Changing it in `.env` later requires `scripts/sync_db_password.sh`
-  (run automatically by `./scripts/start_services.sh`) to reconcile it.
+  created. Changing it in `.env` later takes effect on the next
+  `./deploy.sh start`, which brings the database role's password into line.
