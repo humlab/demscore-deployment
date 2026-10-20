@@ -66,7 +66,9 @@ map has no geometry or policy for — the previous data is restored (after
 asking, when run from a terminal). Every run keeps its logs and summary under
 `state/imports/`. Options: `--yes` to skip the question, `--preload N` or
 `--no-preload` to decide about the tile warm-up in advance, `--verbose` to see
-every step's output.
+every step's output. In a terminal each step shows a progress bar; its estimate
+comes from how long the same step took last time, so the first import on a
+server can only guess.
 
 The import renames the browser's tile cache as well as emptying the server's,
 so readers get the new map on their next visit without a hard reload.

@@ -226,6 +226,11 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `scripts/import_data_report.py`: the preflight check of the export and the import
   summary, run in the tools container. Its `DATASETS` table and its copy of the loader's
   numeric rules must agree with `load_demscore_module_vars.sh`, which stays the authority
+- `scripts/lib/progress.sh`: the progress bar `import_data.sh` draws for each step and the
+  preloader draws for its requests, on a terminal only. A step cannot report a fraction, so
+  each run writes `<step>.timeline` (when its log reached each line count) beside the log,
+  and the next run reads the last successful run's: line n now is where that run was at
+  t(n). A step that changes what it prints moves the bar off true until it has run once
 - `scripts/lib/tools.sh`: `run_tool`, `tool_path`, `tool_tmpdir` -- how a script runs a
   helper in the tools container. The repository is mounted at `/work`, so a tool can only
   see paths inside it; scratch files go to `state/tmp/`

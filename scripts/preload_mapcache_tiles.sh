@@ -233,6 +233,8 @@ ZOOM_ZERO_RESOLUTION=156543.03392804097
 
 # shellcheck source=scripts/lib/tools.sh
 source "${ROOT_DIR}/scripts/lib/tools.sh"
+# shellcheck source=scripts/lib/progress.sh
+source "${ROOT_DIR}/scripts/lib/progress.sh"
 # Inside the repository, where the tools container that resolves polarities
 # can read the combinations file.
 TMP_DIR="$(tool_tmpdir)"
@@ -418,6 +420,19 @@ request_idx=0
 success_count=0
 fail_count=0
 
+# On a terminal, one bar redrawn at most once a second, with curl's own error
+# lines kept aside so they do not break it (they are summed up at the end).
+# Anywhere else, a line every 500 requests, as before.
+SHOW_BAR=0
+CURL_ERRORS=/dev/stderr
+if progress_enabled && (( DRY_RUN == 0 )); then
+  SHOW_BAR=1
+  CURL_ERRORS="$TMP_DIR/curl_errors.log"
+  : > "$CURL_ERRORS"
+fi
+loop_started=$SECONDS
+last_draw=-1
+
 while IFS=$'\t' read -r dataset variable year polarity; do
   for palette in "${VALIDATED_PALETTES[@]}"; do
     palette_param=""
@@ -442,19 +457,39 @@ while IFS=$'\t' read -r dataset variable year polarity; do
         continue
       fi
 
-      if curl -fsS --max-time 60 --output /dev/null "$url"; then
+      if curl -fsS --max-time 60 --output /dev/null "$url" 2>>"$CURL_ERRORS"; then
         success_count=$((success_count + 1))
       else
         fail_count=$((fail_count + 1))
         printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" "$dataset" "$variable" "$year" "$polarity" "$palette" "$z" "$x" "$y" >> "$FAILURES_FILE"
       fi
 
-      if (( request_idx % 500 == 0 )) || (( request_idx == planned_requests )); then
+      if (( SHOW_BAR )); then
+        if (( SECONDS != last_draw || request_idx == planned_requests )); then
+          last_draw=$SECONDS
+          spent=$(( SECONDS - loop_started ))
+          bar_text="${request_idx}/${planned_requests} · ${fail_count} failed"
+          # A rate needs a few seconds of requests behind it.
+          if (( spent >= 3 )); then
+            left=$(( spent * (planned_requests - request_idx) / request_idx ))
+            bar_text+=" · ~$(progress_format_seconds "$left") left"
+          fi
+          progress_draw "Preloading tiles" $(( request_idx * 1000 / planned_requests )) "$bar_text"
+        fi
+      elif (( request_idx % 500 == 0 )) || (( request_idx == planned_requests )); then
         echo "Progress: ${request_idx}/${planned_requests} (ok=${success_count}, failed=${fail_count})"
       fi
     done < "$TILES_FILE"
   done
 done < "$COMBOS_FILE"
+
+if (( SHOW_BAR )); then
+  echo
+  if [[ -s "$CURL_ERRORS" ]]; then
+    echo "curl reported $(wc -l < "$CURL_ERRORS") error(s); the first:"
+    head -n 3 "$CURL_ERRORS" | sed 's/^/  /'
+  fi
+fi
 
 echo "Done."
 echo "- attempted: ${request_idx}"

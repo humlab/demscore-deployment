@@ -42,6 +42,8 @@ STATE_DIR="${ROOT_DIR}/state"
 IMPORTS_DIR="${STATE_DIR}/imports"
 # shellcheck source=scripts/lib/tools.sh
 source "${ROOT_DIR}/scripts/lib/tools.sh"
+# shellcheck source=scripts/lib/progress.sh
+source "${ROOT_DIR}/scripts/lib/progress.sh"
 # Run in the tools container, so repository-relative.
 REPORT="scripts/import_data_report.py"
 # Run directories kept; older ones are pruned at the start of a run.
@@ -171,6 +173,12 @@ STAGES_FILE="${RUN_DIR}/stages.tsv"
 BACKUP_FILE="${RUN_DIR}/backup.sql.gz"
 HAVE_BACKUP=0
 INTERRUPTED=0
+# The running step's process group, while one runs (see run_stage).
+STAGE_PID=""
+PROGRESS=0
+if progress_enabled && (( ! VERBOSE )); then
+  PROGRESS=1
+fi
 # Set once the load step starts: before that, nothing in the database has
 # changed, and an interrupted run has nothing to undo.
 DATA_TOUCHED=0
@@ -222,6 +230,11 @@ on_interrupt() {
   fi
   INTERRUPTED=1
   echo
+  # The step runs in a process group of its own, which the terminal's Ctrl-C
+  # does not reach, so it is passed on.
+  if [[ -n "$STAGE_PID" ]]; then
+    kill -INT -- -"$STAGE_PID" 2>/dev/null || true
+  fi
   end_script_sessions < /dev/null > /dev/null 2>&1 || true
   if (( ! DATA_TOUCHED )); then
     echo "Interrupted before anything was changed." >&2
@@ -248,8 +261,11 @@ run_stage() {
     echo "---- ${label} ----"
     if "$@" < /dev/null > >(tee "$log") 2>&1; then rc=0; else rc=$?; fi
   else
+    watch_stage "$key" "$label" "$log" "$start" "$@"
+    if wait "$STAGE_PID"; then rc=0; else rc=$?; fi
+    STAGE_PID=""
+    (( PROGRESS )) && progress_clear
     printf '  %-26s ' "$label"
-    if "$@" < /dev/null > "$log" 2>&1; then rc=0; else rc=$?; fi
   fi
   elapsed=$(( $(date +%s) - start ))
   if (( rc == 0 )); then status=ok; else status=failed; fi
@@ -267,67 +283,78 @@ run_stage() {
   [[ "$status" == ok ]]
 }
 
-# Everything the summary needs from the database, as one JSON object, so the
-# report script never connects to it. Each part is null when its table does
-# not exist (a first install, or a step that never got that far).
-collect_db_facts() {
-  psql_db -q -At <<'SQL'
--- Never wait on somebody else's lock for long: these facts are worth having,
--- but not worth an import that sits silent behind a session holding the tables.
-SET lock_timeout = '30s';
+# Starts a step in the background, in a process group of its own (so Ctrl-C
+# can be passed on to all of it, see on_interrupt), and watches its log until
+# it exits: writing the step's timeline beside the log for the next run's
+# estimate, and drawing a progress bar when on a terminal (scripts/lib/progress.sh).
+# Leaves the step's pid in STAGE_PID for the caller to wait on.
+watch_stage() {
+  local key="$1" label="$2" log="$3" start="$4"
+  shift 4
+  local timeline="${RUN_DIR}/${key}.timeline"
+  local lines=0 now_lines reached=0 elapsed
+  local reference_timeline="" reference_total=0
+  # map_restore runs the same script as map, so it goes by map's timeline.
+  find_reference_timeline "${key/map_restore/map}"
 
-CREATE FUNCTION pg_temp.rows(query TEXT) RETURNS JSON LANGUAGE plpgsql AS $fn$
-DECLARE
-  result JSON;
-BEGIN
-  EXECUTE format('SELECT COALESCE(json_agg(q), ''[]''::json) FROM (%s) q', query) INTO result;
-  RETURN result;
-EXCEPTION WHEN undefined_table OR undefined_column THEN
-  RETURN NULL;
-END
-$fn$;
+  : > "$timeline"
+  set -m
+  "$@" < /dev/null > "$log" 2>&1 &
+  STAGE_PID=$!
+  set +m
 
-SELECT json_build_object(
-  'variables', pg_temp.rows($q$
-    SELECT dataset, variable, hidden FROM demscore.variables ORDER BY 1, 2 $q$),
-  'columns', pg_temp.rows($q$
-    SELECT dataset, column_name, outcome, value_count, na_token_cells, detail
-    FROM demscore.import_column_report ORDER BY dataset, column_position $q$),
-  'counts', pg_temp.rows($q$
-    SELECT v.dataset,
-           count(dv.id) AS values,
-           count(DISTINCT dv.country_id) AS countries,
-           count(dv.id) FILTER (WHERE dv.country_id IS NULL) AS unmapped,
-           min(dv.year) AS year_min,
-           max(dv.year) AS year_max
-    FROM demscore.variables v
-    LEFT JOIN demscore.dataset_values dv ON dv.variable_id = v.id
-    GROUP BY v.dataset $q$),
-  'metadata_parsed', pg_temp.rows($q$
-    SELECT dataset, count(*) AS entries FROM demscore.variable_metadata_raw GROUP BY 1 $q$),
-  'metadata_matched', pg_temp.rows($q$
-    SELECT v.dataset,
-           count(*) AS visible,
-           count(vm.variable_id) AS matched,
-           COALESCE(json_agg(v.variable ORDER BY v.variable)
-                    FILTER (WHERE vm.variable_id IS NULL), '[]') AS unmatched
-    FROM demscore.variables v
-    LEFT JOIN demscore.variable_metadata vm ON vm.variable_id = v.id
-    WHERE NOT v.hidden
-    GROUP BY v.dataset $q$),
-  'audit', pg_temp.rows($q$
-    SELECT dataset, resolution_status AS status,
-           count(DISTINCT COALESCE(iso3, '') || '|' || COALESCE(country_name, '')) AS entities,
-           sum(value_count) AS values
-    FROM demscore.dataset_value_unmapped_audit GROUP BY 1, 2 $q$),
-  'unresolved', pg_temp.rows($q$
-    SELECT dataset, COALESCE(iso3, '-') AS iso3, country_name,
-           min(year) AS from_year, max(year) AS to_year, sum(value_count) AS values
-    FROM demscore.dataset_value_unmapped_audit
-    WHERE resolution_status = 'unresolved'
-    GROUP BY 1, 2, 3 ORDER BY sum(value_count) DESC $q$)
-);
-SQL
+  while kill -0 "$STAGE_PID" 2>/dev/null; do
+    elapsed=$(( $(date +%s) - start ))
+    now_lines="$(wc -l < "$log" 2>/dev/null || echo 0)"
+    now_lines="${now_lines//[!0-9]/}"
+    if (( ${now_lines:-0} != lines )); then
+      lines=${now_lines:-0}
+      reached=$elapsed
+      echo "$elapsed $lines" >> "$timeline"
+    fi
+    (( PROGRESS )) && draw_stage_progress "$key" "$label" "$log" "$elapsed" "$lines" "$reached"
+    sleep 1
+  done
+  # The step's last lines can land after the last look at its log.
+  now_lines="$(wc -l < "$log" 2>/dev/null || echo 0)"
+  echo "$(( $(date +%s) - start )) ${now_lines//[!0-9]/}" >> "$timeline"
+}
+
+# The newest earlier run in which this step succeeded and left a timeline.
+# Sets reference_timeline and reference_total in the caller.
+find_reference_timeline() {
+  local key="$1" dir total
+  while IFS= read -r dir; do
+    [[ "$dir" == "$RUN_DIR" || ! -s "${dir}/${key}.timeline" ]] && continue
+    total="$(awk -F'\t' -v k="$key" '$1 == k && $3 == "ok" { t = $4 } END { print t + 0 }' "${dir}/stages.tsv" 2>/dev/null)"
+    if (( ${total:-0} > 0 )); then
+      reference_timeline="${dir}/${key}.timeline"
+      reference_total="$total"
+      return 0
+    fi
+  done < <(find "$IMPORTS_DIR" -mindepth 1 -maxdepth 1 -type d -name '20*' | sort -r)
+}
+
+draw_stage_progress() {
+  local key="$1" label="$2" log="$3" elapsed="$4" lines="$5" reached="$6"
+  local permille left typical text activity
+  if [[ -n "$reference_timeline" ]]; then
+    read -r permille left < <(progress_estimate "$reference_timeline" "$reference_total" "$lines" "$elapsed" "$reached")
+  else
+    # No earlier run to go by: a typical duration, and never quite the end.
+    typical="$(progress_typical_seconds "$key")"
+    permille=$(( elapsed * 1000 / typical ))
+    (( permille > 950 )) && permille=950
+    left=$(( typical - elapsed ))
+  fi
+  if (( left > 0 )); then
+    text="~$(progress_format_seconds "$left") left"
+  else
+    text="finishing"
+  fi
+  activity="$(progress_activity "$log")"
+  [[ -n "$activity" ]] && text+=" · ${activity}"
+  progress_draw "$label" "$permille" "$text"
 }
 
 print_summary() {
@@ -383,7 +410,6 @@ backup_current_data() {
     --compress=1 "${args[@]}" > "$BACKUP_FILE" || return 1
   podman compose exec -T db gzip -t < "$BACKUP_FILE" || return 1
   echo "Wrote $(du -h "$BACKUP_FILE" | cut -f1) to ${BACKUP_FILE#"$ROOT_DIR"/}"
-  HAVE_BACKUP=1
 }
 
 # One transaction: the backup goes back in whole or not at all.
@@ -564,7 +590,10 @@ fi
 
 echo "Importing (each step's output is in ${RUN_DIR_REL}/)"
 
-if ! run_stage backup "Back up current data" backup_current_data; then
+if run_stage backup "Back up current data" backup_current_data; then
+  # Read off the file: the step ran in a subshell of its own (run_stage).
+  [[ -s "$BACKUP_FILE" ]] && HAVE_BACKUP=1
+else
   print_summary
   echo
   echo "Import stopped before changing anything: the current data could not be backed up."
@@ -590,7 +619,7 @@ if ! run_stage metadata "Load codebook metadata" "${ROOT_DIR}/scripts/load_varia
   echo "    (carrying on: the map does not need the codebooks)"
 fi
 
-(( VERBOSE )) || echo "    the map step takes several minutes; follow it with: tail -f ${RUN_DIR_REL}/map.log"
+(( VERBOSE || PROGRESS )) || echo "    the map step takes several minutes; follow it with: tail -f ${RUN_DIR_REL}/map.log"
 if ! run_stage map "Build map" "${ROOT_DIR}/scripts/setup_mapserver_hex_service.sh"; then
   print_summary
   offer_restore
