@@ -714,6 +714,13 @@ Before merging changes:
   about: they are derived from `country_id`, so anything that changes what maps changes
   them.
 - Dynamic SQL surface is partially constrained by MapServer regex validation; keep validation strict.
+- **Ctrl-C does not stop SQL already sent to the db container.** `podman compose exec db
+  psql ...` does not pass the signal on, so an interrupted script's psql runs to the end of
+  its file with its locks held, and the next script that touches those tables waits behind
+  it without a word. `scripts/import_data.sh` ends its own socket-connected sessions on the
+  first Ctrl-C, and at start refuses to proceed past any it finds left over (it offers to
+  end them, from a terminal). Each setup SQL file and the load are single transactions, so
+  ending one rolls it back cleanly. A script run by hand has no such guard.
 - `POSTGRES_PASSWORD` initialises the `demscore` role once, when the `pg_data` volume is
   created, and lives in the volume from then on; changing `.env` afterwards does not reach
   it. Nothing in `scripts/` notices, because they all reach the database as

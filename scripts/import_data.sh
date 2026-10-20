@@ -171,8 +171,49 @@ STAGES_FILE="${RUN_DIR}/stages.tsv"
 BACKUP_FILE="${RUN_DIR}/backup.sql.gz"
 HAVE_BACKUP=0
 INTERRUPTED=0
+# Set once the load step starts: before that, nothing in the database has
+# changed, and an interrupted run has nothing to undo.
+DATA_TOUCHED=0
 : > "$STAGES_FILE"
 
+# Sessions that came in over the db container's own unix socket and are doing
+# something -- that is, `podman compose exec db psql` and pg_dump, which is how
+# every script here connects. The web backend and MapServer connect over TCP,
+# so they are never among them, and an idle psql shell holds no locks.
+SCRIPT_SESSIONS_SQL="FROM pg_stat_activity WHERE datname = current_database()
+  AND backend_type = 'client backend' AND client_addr IS NULL
+  AND state <> 'idle' AND pid <> pg_backend_pid()"
+
+count_script_sessions() {
+  psql_db -At -c "SELECT count(*) ${SCRIPT_SESSIONS_SQL}"
+}
+
+list_script_sessions() {
+  psql_db -P pager=off -c "
+    SELECT pid, state, COALESCE(wait_event_type, '-') AS waiting_on,
+           date_trunc('second', now() - COALESCE(xact_start, query_start)) AS running_for,
+           left(regexp_replace(query, '\s+', ' ', 'g'), 60) AS statement
+    ${SCRIPT_SESSIONS_SQL}
+    ORDER BY COALESCE(xact_start, query_start)"
+}
+
+# Rolls back whatever those sessions were in the middle of: each setup SQL
+# file, and the load, is a single transaction.
+end_script_sessions() {
+  psql_db -At -c "SELECT count(pg_terminate_backend(pid)) ${SCRIPT_SESSIONS_SQL}" || return 1
+  local _
+  for _ in {1..15}; do
+    [[ "$(count_script_sessions)" == 0 ]] && return 0
+    sleep 1
+  done
+  return 1
+}
+
+# Ctrl-C stops this script and the podman client of the step it was running,
+# but not SQL that client had already handed to the db container: `podman
+# exec` does not pass the signal on, so that psql would run to the end of its
+# file with its locks held, and the next import would wait behind it. So the
+# first Ctrl-C ends the import's database sessions too.
 on_interrupt() {
   if (( INTERRUPTED )); then
     echo
@@ -181,7 +222,12 @@ on_interrupt() {
   fi
   INTERRUPTED=1
   echo
-  echo "Interrupted -- finishing the current step's cleanup..." >&2
+  end_script_sessions < /dev/null > /dev/null 2>&1 || true
+  if (( ! DATA_TOUCHED )); then
+    echo "Interrupted before anything was changed." >&2
+    exit 130
+  fi
+  echo "Interrupted -- stopped this import's database work; finishing up..." >&2
 }
 trap on_interrupt INT TERM
 
@@ -226,6 +272,10 @@ run_stage() {
 # not exist (a first install, or a step that never got that far).
 collect_db_facts() {
   psql_db -q -At <<'SQL'
+-- Never wait on somebody else's lock for long: these facts are worth having,
+-- but not worth an import that sits silent behind a session holding the tables.
+SET lock_timeout = '30s';
+
 CREATE FUNCTION pg_temp.rows(query TEXT) RETURNS JSON LANGUAGE plpgsql AS $fn$
 DECLARE
   result JSON;
@@ -329,6 +379,7 @@ backup_current_data() {
   # Compressed by pg_dump and checked by the db container's gzip, so the host
   # needs neither.
   podman compose exec -T db pg_dump -U "$PG_USER" -d "$PG_DB" --no-owner --no-privileges \
+    --lock-wait-timeout=60s \
     --compress=1 "${args[@]}" > "$BACKUP_FILE" || return 1
   podman compose exec -T db gzip -t < "$BACKUP_FILE" || return 1
   echo "Wrote $(du -h "$BACKUP_FILE" | cut -f1) to ${BACKUP_FILE#"$ROOT_DIR"/}"
@@ -442,6 +493,32 @@ if ! start_database < /dev/null > "${RUN_DIR}/database.log" 2>&1; then
 fi
 echo "ok"
 
+# Anything still running in the database from outside this import -- most
+# likely an earlier one interrupted before this script ended its sessions --
+# holds locks every step below would wait on without a word.
+busy="$(count_script_sessions < /dev/null 2>/dev/null || echo 0)"
+if [[ "$busy" =~ ^[1-9][0-9]*$ ]]; then
+  echo
+  echo "The database is still busy with ${busy} session(s) that are not part of this import:"
+  list_script_sessions < /dev/null 2>&1 | sed 's/^/    /'
+  echo "Most likely an earlier import or setup that was interrupted: Ctrl-C stopped its"
+  echo "script, but SQL it had already sent to the db container kept running there."
+  echo "Ending them rolls back what they were doing; this import redoes all of it."
+  if is_interactive && ask "End them and continue?" n; then
+    printf '  %-26s ' "End leftover sessions"
+    if end_script_sessions < /dev/null > "${RUN_DIR}/sessions.log" 2>&1; then
+      echo "ok"
+    else
+      echo "failed"
+      echo "Nothing was changed. The sessions are still running; see ${RUN_DIR_REL}/sessions.log." >&2
+      exit 1
+    fi
+  else
+    echo "Nothing was changed. Let them finish, or run the import from a terminal and let it end them."
+    exit 1
+  fi
+fi
+
 printf '  %-26s ' "Prepare tools container"
 if ! ensure_tools_image < /dev/null > "${RUN_DIR}/tools.log" 2>&1; then
   echo "failed"
@@ -494,6 +571,7 @@ if ! run_stage backup "Back up current data" backup_current_data; then
   exit 1
 fi
 
+DATA_TOUCHED=1
 if ! run_stage load "Load CSV files" "${ROOT_DIR}/scripts/load_demscore_module_vars.sh"; then
   print_summary
   echo
