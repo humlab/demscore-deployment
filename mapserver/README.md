@@ -51,8 +51,9 @@ Pass these as WMS request parameters:
 - `polarity`: `positive` | `negative` | `neutral`. Which end of the scale is the unfavourable
   one. Read by the fill layers only, and only by the two diverging schemes: it picks
   which end of their band the hexagons start from (`positive` reverses it, in SQL, as
-  `base + (8 - class_idx)`), and `neutral` sends a variable with no favourable end to a
-  sequential band instead
+  `base + (8 - class_idx)`). `neutral`, for a variable with no favourable end, is drawn the
+  same way round as `positive` -- low values at the scheme's first-named colour -- so a
+  scheme looks the same on every variable
 - `palette`: `default` | `indigo_amber` | `viridis` | `cividis`. Which colour scheme paints the
   hexagons. Read by the fill layers only.
 

@@ -41,10 +41,7 @@ function toRgb(hex) {
 function bandUsers(base) {
   const users = [];
   for (const [key, palette] of Object.entries(MAP_PALETTES)) {
-    const roles = [];
-    if (palette.signed.base === base) roles.push(palette.honoursPolarity ? "signed" : "all variables");
-    if (palette.neutral.base === base && palette.neutral.base !== palette.signed.base) roles.push("unsigned");
-    if (roles.length > 0) users.push(`${key} (${roles.join(", ")})`);
+    if (palette.band.base === base) users.push(key);
   }
   return users.join("; ");
 }

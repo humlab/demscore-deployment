@@ -14,7 +14,7 @@
 # carries both which scheme was asked for and which way round it reads. A band
 # is reversed in SQL (base + (8 - class_idx)) rather than written out twice.
 
-# class_idx 1-7 -- default (signed)
+# class_idx 1-7 -- default
   CLASS
     NAME "1"
     EXPRESSION ([class_idx] = 1)
@@ -85,7 +85,7 @@
     END
   END
 
-# class_idx 11-17 -- viridis (all variables)
+# class_idx 11-17 -- viridis
   CLASS
     NAME "11"
     EXPRESSION ([class_idx] = 11)
@@ -156,7 +156,7 @@
     END
   END
 
-# class_idx 21-27 -- indigo_amber (signed)
+# class_idx 21-27 -- indigo_amber
   CLASS
     NAME "21"
     EXPRESSION ([class_idx] = 21)
@@ -227,7 +227,7 @@
     END
   END
 
-# class_idx 31-37 -- cividis (all variables)
+# class_idx 31-37 -- cividis
   CLASS
     NAME "31"
     EXPRESSION ([class_idx] = 31)
@@ -293,148 +293,6 @@
     EXPRESSION ([class_idx] = 37)
     STYLE
       COLOR 242 223 74
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-# class_idx 41-47 -- default (unsigned)
-  CLASS
-    NAME "41"
-    EXPRESSION ([class_idx] = 41)
-    STYLE
-      COLOR 210 237 201
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "42"
-    EXPRESSION ([class_idx] = 42)
-    STYLE
-      COLOR 165 217 157
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "43"
-    EXPRESSION ([class_idx] = 43)
-    STYLE
-      COLOR 116 196 118
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "44"
-    EXPRESSION ([class_idx] = 44)
-    STYLE
-      COLOR 65 171 93
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "45"
-    EXPRESSION ([class_idx] = 45)
-    STYLE
-      COLOR 35 139 69
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "46"
-    EXPRESSION ([class_idx] = 46)
-    STYLE
-      COLOR 11 107 47
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "47"
-    EXPRESSION ([class_idx] = 47)
-    STYLE
-      COLOR 0 68 27
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-# class_idx 51-57 -- indigo_amber (unsigned)
-  CLASS
-    NAME "51"
-    EXPRESSION ([class_idx] = 51)
-    STYLE
-      COLOR 249 205 210
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "52"
-    EXPRESSION ([class_idx] = 52)
-    STYLE
-      COLOR 240 156 176
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "53"
-    EXPRESSION ([class_idx] = 53)
-    STYLE
-      COLOR 219 110 152
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "54"
-    EXPRESSION ([class_idx] = 54)
-    STYLE
-      COLOR 185 71 143
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "55"
-    EXPRESSION ([class_idx] = 55)
-    STYLE
-      COLOR 142 42 134
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "56"
-    EXPRESSION ([class_idx] = 56)
-    STYLE
-      COLOR 101 26 110
-      OUTLINECOLOR 255 255 255
-      WIDTH 0.25
-    END
-  END
-
-  CLASS
-    NAME "57"
-    EXPRESSION ([class_idx] = 57)
-    STYLE
-      COLOR 46 8 64
       OUTLINECOLOR 255 255 255
       WIDTH 0.25
     END

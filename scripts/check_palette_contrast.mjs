@@ -350,7 +350,7 @@ const bands = paletteBands();
 const offeredBases = new Set(
   Object.values(MAP_PALETTES)
     .filter((palette) => palette.offered !== false)
-    .flatMap((palette) => [palette.signed.base, palette.neutral.base]),
+    .map((palette) => palette.band.base),
 );
 
 // Which schemes each band serves, so a failure names something a reader would
@@ -359,7 +359,7 @@ const bandNames = new Map(
   bands.map(([base]) => [
     base,
     Object.entries(MAP_PALETTES)
-      .filter(([, palette]) => palette.signed.base === base || palette.neutral.base === base)
+      .filter(([, palette]) => palette.band.base === base)
       .map(([key]) => key)
       .join(" / "),
   ]),
