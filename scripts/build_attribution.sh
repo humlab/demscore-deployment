@@ -4,6 +4,10 @@ set -euo pipefail
 # Builds webapp/config/attribution.json, the credits the app shows: the always-on
 # line under the map and the "Sources & licences" dialog behind it.
 #
+# The indicator credits are read out of the codebooks (the tables
+# scripts/load_variable_metadata.sh fills), and it fails on a dataset on the map
+# that its codebook gave no citation for.
+#
 # The point of generating it rather than writing it is that a boundary source can
 # reach the map without anyone remembering the credits. `demscore.countries` is
 # the one table that says what geometry every drawn country rests on, so this
@@ -24,6 +28,9 @@ PG_DB="${PG_DB:-demscore}"
 PG_USER="${PG_USER:-demscore}"
 SOURCES_FILE="${SOURCES_FILE:-${ROOT_DIR}/webapp/config/attribution_sources.json}"
 OUT_FILE="${OUT_FILE:-${ROOT_DIR}/webapp/config/attribution.json}"
+# Read for each dataset's display name only; the credits themselves come from
+# the codebooks.
+VARIABLES_FILE="${VARIABLES_FILE:-${ROOT_DIR}/webapp/config/variables.json}"
 # Which mesh the reported hexagon counts are measured at. One of the three sizes
 # the app actually asks for, so the weights are a weight somebody can see.
 WEIGHT_HEX_SIZE="${WEIGHT_HEX_SIZE:-100000}"
@@ -34,6 +41,7 @@ source "${ROOT_DIR}/scripts/lib/tools.sh"
 # can read it.
 TMP_DIR="$(tool_tmpdir)"
 TMP_TSV="${TMP_DIR}/sources.tsv"
+TMP_INDICATORS="${TMP_DIR}/indicators.json"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 echo "Reading the geometry sources that are actually on the map..."
@@ -77,8 +85,81 @@ if [[ ! -s "$TMP_TSV" ]]; then
   exit 1
 fi
 
+echo "Reading the indicator credits out of the codebooks..."
+# Which works the indicator data asks to be cited for, from the codebook tables
+# scripts/load_variable_metadata.sh fills. A bibliography entry is credited when
+# a variable the map shows cites it, or when no variable entry cites it at all
+# (the dataset description is then what does); one cited only by hidden or
+# dropped variables -- REPDEM's WECEE edition, QoG's OECD twin -- is left out.
+# It counts as the dataset's own citation when something on the map cites it as
+# its "Dataset citation", or nothing cites it; otherwise it is the original
+# source of particular indicators.
+podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 \
+  --quiet --no-align --tuples-only -c "
+DO \$\$
+BEGIN
+  IF to_regclass('demscore.codebook_bibliography') IS NULL THEN
+    RAISE EXCEPTION 'No codebook credits in the database. Run ./deploy.sh import-data.';
+  END IF;
+END;
+\$\$;
+WITH visible AS (
+  SELECT vm.dataset, vm.source_long_tag AS long_tag, vm.dataset_tag
+  FROM demscore.variable_metadata vm
+  JOIN demscore.variables v ON v.id = vm.variable_id
+  WHERE NOT v.hidden
+),
+works AS (
+  SELECT
+    b.dataset,
+    b.entry_no,
+    b.citation,
+    b.url,
+    count(c.long_tag) = 0
+      OR COALESCE(bool_or(c.role = 'dataset' AND vis.long_tag IS NOT NULL), FALSE) AS own,
+    count(DISTINCT vis.long_tag) AS cited_by
+  FROM demscore.codebook_bibliography b
+  LEFT JOIN demscore.codebook_citations c
+    ON c.dataset = b.dataset AND c.entry_no = b.entry_no
+  LEFT JOIN visible vis
+    ON vis.dataset = c.dataset AND vis.long_tag = c.long_tag
+  GROUP BY b.dataset, b.entry_no, b.citation, b.url
+  HAVING count(c.long_tag) = 0 OR count(vis.long_tag) > 0
+),
+datasets AS (
+  SELECT DISTINCT dataset FROM demscore.variables WHERE NOT hidden
+),
+projects AS (
+  SELECT DISTINCT ON (dataset) dataset, project_name, project_url
+  FROM demscore.codebook_source_datasets
+  ORDER BY dataset, dataset_tag
+)
+SELECT COALESCE(json_object_agg(d.dataset, json_build_object(
+  'projectName', p.project_name,
+  'url', p.project_url,
+  'citations', (
+    SELECT COALESCE(json_agg(json_build_object('text', w.citation, 'url', w.url)
+                             ORDER BY w.cited_by DESC, w.entry_no), '[]'::json)
+    FROM works w WHERE w.dataset = d.dataset AND w.own),
+  'sourceCitations', (
+    SELECT COALESCE(json_agg(json_build_object('text', w.citation, 'url', w.url)
+                             ORDER BY w.entry_no), '[]'::json)
+    FROM works w WHERE w.dataset = d.dataset AND NOT w.own),
+  -- The terms of each source dataset the map shows a variable from.
+  'licenses', (
+    SELECT COALESCE(json_agg(json_build_object('source', s.title, 'text', s.license)
+                             ORDER BY s.dataset_tag), '[]'::json)
+    FROM demscore.codebook_source_datasets s
+    WHERE s.dataset = d.dataset AND s.license IS NOT NULL
+      AND EXISTS (SELECT 1 FROM visible vis
+                  WHERE vis.dataset = s.dataset AND vis.dataset_tag = s.dataset_tag))
+)), '{}'::json)
+FROM datasets d
+LEFT JOIN projects p ON p.dataset = d.dataset;" > "$TMP_INDICATORS"
+
 run_tool env SOURCES_FILE="$(tool_path "$SOURCES_FILE")" OUT_FILE="$(tool_path "$OUT_FILE")" \
-  WEIGHT_HEX_SIZE="$WEIGHT_HEX_SIZE" python3 - "$(tool_path "$TMP_TSV")" <<'PY'
+  VARIABLES_FILE="$(tool_path "$VARIABLES_FILE")" WEIGHT_HEX_SIZE="$WEIGHT_HEX_SIZE" \
+  python3 - "$(tool_path "$TMP_TSV")" "$(tool_path "$TMP_INDICATORS")" <<'PY'
 import json
 import os
 import sys
@@ -86,6 +167,7 @@ from datetime import datetime, timezone
 
 sources_file = os.environ["SOURCES_FILE"]
 out_file = os.environ["OUT_FILE"]
+variables_file = os.environ["VARIABLES_FILE"]
 weight_hex_size = int(os.environ["WEIGHT_HEX_SIZE"])
 
 with open(sources_file, encoding="utf-8") as handle:
@@ -148,15 +230,61 @@ for row in rows:
             f"which is not in licenses"
         )
 
-if problems:
-    print("Attribution register is incomplete:", file=sys.stderr)
-    for problem in problems:
+# The indicator credits, one block per dataset with a variable on the map, in the
+# order the variable list shows the datasets. The citations, the project URL and
+# the licence text are the codebook's own; only the display name is ours.
+with open(sys.argv[2], encoding="utf-8") as handle:
+    from_codebooks = json.load(handle)
+with open(variables_file, encoding="utf-8") as handle:
+    presentation = json.load(handle).get("datasets", {})
+
+indicator_problems = []
+indicator_datasets = {}
+order = [key for key in presentation if key in from_codebooks]
+order += sorted(key for key in from_codebooks if key not in presentation)
+for key in order:
+    found = from_codebooks[key]
+    shown = presentation.get(key, {})
+    title, label = shown.get("title"), shown.get("label")
+    name = f"{title} ({label})" if title and label and title != label else (title or label or found["projectName"] or key)
+    if not found["citations"]:
+        indicator_problems.append(
+            f"indicator dataset {key!r} has variables on the map, but its codebook yielded no "
+            f"citation for them"
+        )
+    # Source datasets of one project usually share their terms word for word.
+    terms = []
+    for entry in found["licenses"]:
+        same = next((t for t in terms if t["text"] == entry["text"]), None)
+        if same:
+            same["sources"].append(entry["source"])
+        else:
+            terms.append({"sources": [entry["source"]], "text": entry["text"]})
+    indicator_datasets[key] = {
+        "title": name,
+        "url": found["url"],
+        "citations": found["citations"],
+        "sourceCitations": found["sourceCitations"],
+        "licenses": terms,
+    }
+
+if problems or indicator_problems:
+    print("Attribution is incomplete:", file=sys.stderr)
+    for problem in problems + indicator_problems:
         print(f"  - {problem}", file=sys.stderr)
-    print(
-        "\nA boundary source that reaches the map without reaching the credits is a licence\n"
-        f"breach. Add the missing entries to {sources_file} and run this again.",
-        file=sys.stderr,
-    )
+    if problems:
+        print(
+            "\nA boundary source that reaches the map without reaching the credits is a licence\n"
+            f"breach. Add the missing entries to {sources_file} and run this again.",
+            file=sys.stderr,
+        )
+    if indicator_problems:
+        print(
+            "\nEvery dataset asks to be cited as a condition of use. The citations are read from\n"
+            "the bibliography at the end of each codebook.pdf (scripts/extract_variable_metadata.py);\n"
+            "check that the codebook has one and that the import's metadata step succeeded.",
+            file=sys.stderr,
+        )
     sys.exit(1)
 
 # Group the per-table rows into one block per credited work. CShapes 2.0 is one
@@ -253,7 +381,7 @@ payload = {
             **{k: v for k, v in licenses[register["mapOutput"]["license"]].items() if k != "label"},
         },
     },
-    "indicatorDatasets": register["indicatorDatasets"],
+    "indicatorDatasets": indicator_datasets,
     "indicatorNote": register.get("indicatorNote"),
     "software": register["software"],
     "media": register["media"],
@@ -275,6 +403,11 @@ for block in boundary:
         f"  {block['title']}: {block['license']['label']}, "
         f"{' + '.join(parts)} countries, "
         f"{block['hexes']} hexagons at {weight_hex_size // 1000} km"
+    )
+for key, block in indicator_datasets.items():
+    print(
+        f"  {block['title']}: {len(block['citations'])} citation(s), "
+        f"{len(block['sourceCitations'])} original source(s)"
     )
 PY
 

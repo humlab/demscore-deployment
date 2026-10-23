@@ -90,6 +90,8 @@ services:
     volumes:
       - ./webapp/dist:/usr/share/nginx/html:ro
       - ./webapp/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Served as /codebooks/<module>/codebook.pdf; nothing else in it is.
+      - ./data/Demscore_Module_Vars:/srv/demscore-modules:ro
     restart: unless-stopped
 
   mapcache:

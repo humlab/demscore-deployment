@@ -89,6 +89,14 @@ The system turns tabular democracy indicator data into a thematic global hex map
      `(basic)` suffixes away again without editing this rule
    - a clean run ends with `unmatched_rows = 0`; anything else is a variable the web client can
      only show as its raw key, with no hover card
+   - the same run reads who to cite for the data. Each codebook's bibliography (its last
+     chapter) goes into `demscore.codebook_bibliography`; which of those works each codebook
+     entry cites -- its `Dataset citation` and `Variable citation`, short forms such as
+     `Teorell et al. (2026b)` resolved against that bibliography -- into
+     `demscore.codebook_citations`; and each source dataset section's project website and
+     `License:` text into `demscore.codebook_source_datasets`. The bibliography, not the
+     section's own prose `Dataset citation:`, because the prose is typed by hand and goes
+     stale: QoG's Standard section still cites version Jan25 under a Jan26 export
 4. Reference boundaries are imported by `ogr2ogr` in `scripts/setup_mapserver_hex_service.sh`:
    - `demscore.countries_src` from `ne_50m_admin_0_countries.geojson` — country identity
      (name, ISO codes) and the untrimmed outline
@@ -219,6 +227,9 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `deploy.sh`: the one way the stack is run, in every environment -- `install`,
   `import-data`, `start`, `stop`, `status`, `preload`, `clear-map-tile-cache`.
   Documentation for whoever runs the stack names this and nothing under `scripts/`
+- `README.md` and `docs/operations.md`: the documentation for whoever runs the stack.
+  The README is a quickstart -- what the system is, the commands, the settings -- and
+  stays that short; detail on what each command does goes in `docs/operations.md`
 - `scripts/import_data.sh`: what `./deploy.sh import-data` and `install` run -- check,
   back up, load, codebooks, map, summary, preload offer (see section 2, step 0). It
   collects what the summary needs from the database itself (`collect_db_facts`, one
@@ -266,7 +277,12 @@ The system turns tabular democracy indicator data into a thematic global hex map
   **fails** on a `geometry_source_dataset` the register cannot name. Run by the setup script
   next to the coverage build. It is the reason a new boundary source cannot reach the tiles
   without reaching the credits: two of the four sources are CC BY-NC-SA 4.0 and one is
-  GPL-3.0, so an uncredited source is a licence breach rather than a cosmetic gap
+  GPL-3.0, so an uncredited source is a licence breach rather than a cosmetic gap.
+  The indicator credits come from the codebook tables (section 2, step 3): a bibliography
+  entry is credited when a visible variable cites it, or when no codebook entry cites it at
+  all; one cited only by hidden or dropped variables (REPDEM's WECEE edition, QoG's OECD twin)
+  is left out. It **fails** on a dataset with a visible variable and no citation, since every
+  module asks to be cited as a condition of use
 - `scripts/build_hex_classes.mjs`: generates `mapserver/hex_classes.inc` from
   `webapp/src/core/palettes.js`, which is where every quantile colour is written. The colours
   have to exist in two languages -- MapServer paints the map, the browser paints the legend
@@ -304,7 +320,11 @@ The system turns tabular democracy indicator data into a thematic global hex map
   two views — the OpenLayers map and a sortable table of the same year's countries,
   one at a time — and `webapp/AGENTS.md` is where that is written down
 - `webapp/config/variables.json`: dataset presentation metadata — `label`, `title`, `color`,
-  `palette` (five shades, darkest first), `codebook`, `download`, `image`, `defaultVariable`.
+  `palette` (five shades, darkest first), `download`, `image`, `defaultVariable`.
+  The codebook link is not in it: the `web` container serves each module's `codebook.pdf`
+  straight out of `data/Demscore_Module_Vars` as `/codebooks/<module>/codebook.pdf` (that
+  file only), and the backend links the one `demscore.variable_metadata.source_pdf` names --
+  the codebook the titles and credits were read from, not a copy beside the web app.
   `download` is Demscore's own downloader replaying a saved *download ID*, one per module, and
   the ID is the selection this deployment loads: its `data.csv` carries the same columns as
   `data/Demscore_Module_Vars/<module>`. It is per-dataset because nothing finer exists — the
@@ -318,9 +338,9 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `webapp/config/variable_coverage.json`: generated coverage strips, served as
   `/api/config/variable-coverage`
 - `webapp/config/attribution_sources.json`: the hand-maintained half of the credits —
-  licence display names and deed URLs, one entry per `geometry_source_dataset`, the full-form
-  indicator citations, the ShareAlike statement for the map's own output, and the software and
-  image courtesies. Nothing derived is in it and nothing in it is derived; the weights and the
+  licence display names and deed URLs, one entry per `geometry_source_dataset`, the
+  ShareAlike statement for the map's own output, and the software and image courtesies. The
+  indicator citations are not in it; they are read out of the codebooks. Nothing derived is in it and nothing in it is derived; the weights and the
   always-visible line are measured by `build_attribution.sh`
 - `webapp/config/attribution.json`: generated credits, served as `/api/config/attribution`.
   A build artefact — it goes stale the same way the coverage strips do
@@ -389,7 +409,8 @@ so an unknown dataset is a 400 rather than a silent fall back to `v_dem`:
 - `/api/config/attribution` — the credits, generated by `scripts/build_attribution.sh`. One
   block per credited work with its licence, citation, role, what this deployment did to it,
   and how many countries and hexagons it accounts for, plus the sentence the always-visible
-  line under the map says. The client falls back to a constant naming the same sources if the
+  line under the map says, and per indicator dataset the citations, original sources and terms
+  of use its codebook states. The client falls back to a constant naming the same sources if the
   fetch fails, because an attribution that depends on a request succeeding is not one
 - `/api/year-counts?dataset=&variable=` — how many countries carry a value in each year of
   one variable, counted exactly as `scripts/build_variable_coverage.sh` counts (distinct
@@ -449,7 +470,7 @@ Set cache toggle in `.env`:
 - First time: `./deploy.sh install` -- generates `.env`, starts services, loads the
   datasets and sets up the map-ready DB objects
 - Thereafter: `./deploy.sh start`
-- New data: `./deploy.sh import-data` (see the README for what the files must look like)
+- New data: `./deploy.sh import-data` (see `docs/operations.md` for what the files must look like)
 
 Setup, as part of `install`, also checks:
 
@@ -670,8 +691,9 @@ Before merging changes:
 5. Run `node scripts/build_hex_classes.mjs --check` and
    `node scripts/check_palette_contrast.mjs` if any colour moved.
 5b. Run `./scripts/build_attribution.sh` if anything touched the reference geometry, the
-   historical registry or the resolution policy. It fails on an uncredited boundary source,
-   and the file it writes is what the credit line and the dialog are both drawn from.
+   historical registry, the resolution policy or the codebook parsing. It fails on an
+   uncredited boundary source or an indicator dataset with no citation, and the file it writes
+   is what the credit line and the dialog are both drawn from.
 6. Run the keyboard pass in `ACCESSIBILITY.md` if any control, dialog or focus behaviour
    moved. There is no automated accessibility check yet, so that list is the check.
 

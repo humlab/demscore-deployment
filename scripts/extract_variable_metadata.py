@@ -16,7 +16,7 @@ import csv
 import os
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 LABELS = [
@@ -364,6 +364,278 @@ def parse_text_file(txt_path: str, source_pdf: str, dataset: str) -> List[Parsed
     return entries
 
 
+# ---------------------------------------------------------------------------
+# Credits: who to cite for the data, read from the same codebook
+# ---------------------------------------------------------------------------
+#
+# Each source dataset section carries a prose "Dataset citation:", but it is
+# typed by hand and goes stale: QoG's Standard section still cites version
+# Jan25 under a Jan26 export. What a variable entry cites -- "Dataset citation:
+# Teorell et al. (2026b)", "Variable citation: World Bank (2024)" -- is generated
+# against the bibliography in the codebook's last chapter, so the bibliography
+# is what the credits are read from, and those short references say which of its
+# works the loaded variables actually rest on.
+
+# "2     QOG", "3     Bibliography". The table of contents spells the same
+# headings with a single space, which keeps it from matching.
+CHAPTER_RE = re.compile(r"^(\d+)\s{2,}(\S.*?)\s*$")
+SECTION_HEADING_RE = re.compile(r"^\d+\.\d+\s+(\S.*?)\s*$")
+ANY_HEADING_RE = re.compile(r"^\d+(?:\.\d+)+\s+\S")
+PAGE_HEADER_RE = re.compile(r"^\s*TOC\s+\d+\s*$")
+# "(2026)", "(2026b)", "(n.d.)"
+REFERENCE_RE = re.compile(r"(.+?)\((\d{4}[a-z]?|n\.d\.)\)")
+URL_PREFIXES = ("http://", "https://")
+# Every Demscore bibliography entry repeats the infrastructure's funding line;
+# the credits say it once for all modules (indicatorNote), not once per work.
+FUNDING_RE = re.compile(
+    r"\s*\b[\w-]+(?: Data)? is part of\s+and funded by DEMSCORE\b[^.]*?Swedish Research Council\."
+)
+
+
+@dataclass
+class SourceDataset:
+    dataset: str
+    source_pdf: str
+    project_name: Optional[str]
+    project_url: Optional[str]
+    dataset_tag: str
+    title: Optional[str]
+    license: Optional[str]
+
+
+@dataclass
+class BibliographyEntry:
+    dataset: str
+    entry_no: int
+    citation: str
+    url: Optional[str]
+    authors: str
+    year: str
+
+
+@dataclass
+class CitationLink:
+    dataset: str
+    long_tag: str
+    entry_no: int
+    role: str
+
+
+def without_page_headers(lines: List[str]) -> List[str]:
+    """Drop each page's running head: the "TOC <page>" line and the lines under it."""
+    out: List[str] = []
+    in_header = False
+    for line in lines:
+        line = line.lstrip("\x0c")
+        if PAGE_HEADER_RE.match(line):
+            in_header = True
+            continue
+        if in_header:
+            if line.strip():
+                continue
+            in_header = False
+        out.append(line)
+    return out
+
+
+def join_wrapped(parts: List[str]) -> str:
+    """Join lines pdftotext wrapped, without breaking a hyphenated name or a URL."""
+    text = ""
+    for part in parts:
+        part = collapse_spaces(part)
+        if not part:
+            continue
+        last_token = text.rsplit(" ", 1)[-1]
+        if not text:
+            text = part
+        elif re.search(r"[^\W\d_]-$", text):
+            text += part
+        elif last_token.startswith(URL_PREFIXES) and (part[0].islower() or part[0].isdigit() or part[0] == "/"):
+            text += part
+        else:
+            text += " " + part
+    return text
+
+
+def collect_paragraphs(lines: List[str]) -> Optional[str]:
+    paragraphs: List[List[str]] = [[]]
+    for line in lines:
+        if line.strip():
+            paragraphs[-1].append(line)
+        elif paragraphs[-1]:
+            paragraphs.append([])
+    text = "\n\n".join(join_wrapped(p) for p in paragraphs if p).strip()
+    return text or None
+
+
+def parse_source_datasets(lines: List[str], source_pdf: str, dataset: str) -> List[SourceDataset]:
+    lines = without_page_headers(lines)
+    tag_indices = [i for i, line in enumerate(lines) if line.strip().startswith("Dataset tag:")]
+    if not tag_indices:
+        return []
+
+    # The project is the chapter the first source dataset sits in; its opening
+    # prose ends on the project's website.
+    project_name = None
+    project_url = None
+    chapter_start = 0
+    for i in range(tag_indices[0], -1, -1):
+        m = CHAPTER_RE.match(lines[i])
+        if m:
+            project_name = m.group(2)
+            chapter_start = i
+            break
+    intro = lines[chapter_start:tag_indices[0]]
+    for i, line in enumerate(intro):
+        m = re.search(r"website:\s*(\S*)", line)
+        if not m:
+            continue
+        project_url = m.group(1) or next((l.split()[0] for l in intro[i + 1:] if l.strip()), None)
+        break
+
+    sources: List[SourceDataset] = []
+    for pos, idx in enumerate(tag_indices):
+        tag = lines[idx].split(":", 1)[1].strip()
+        title = None
+        for i in range(idx - 1, -1, -1):
+            if lines[i].strip():
+                m = SECTION_HEADING_RE.match(lines[i].strip())
+                title = m.group(1) if m else None
+                break
+
+        end = tag_indices[pos + 1] if pos + 1 < len(tag_indices) else len(lines)
+        license_lines: List[str] = []
+        for i in range(idx + 1, end):
+            stripped = lines[i].strip()
+            if not license_lines:
+                if stripped.startswith("License:"):
+                    license_lines.append(stripped.split(":", 1)[1])
+                continue
+            if stripped.startswith("More detailed information") or ANY_HEADING_RE.match(stripped) \
+                    or CHAPTER_RE.match(lines[i]):
+                break
+            license_lines.append(lines[i])
+
+        sources.append(SourceDataset(
+            dataset=dataset,
+            source_pdf=source_pdf,
+            project_name=project_name,
+            project_url=project_url,
+            dataset_tag=tag,
+            title=title,
+            license=collect_paragraphs(license_lines),
+        ))
+    return sources
+
+
+def parse_bibliography(lines: List[str], dataset: str) -> List[BibliographyEntry]:
+    lines = without_page_headers(lines)
+    start = None
+    for i, line in enumerate(lines):
+        m = CHAPTER_RE.match(line)
+        if m and m.group(2).lower() == "bibliography":
+            start = i + 1
+    if start is None:
+        return []
+
+    # An entry starts flush left and its wrapped lines are indented.
+    raw_entries: List[List[str]] = []
+    for line in lines[start:]:
+        if CHAPTER_RE.match(line):
+            break
+        if not line.strip():
+            continue
+        if not line[0].isspace() or not raw_entries:
+            raw_entries.append([line])
+        else:
+            raw_entries[-1].append(line)
+
+    entries: List[BibliographyEntry] = []
+    for raw in raw_entries:
+        url = None
+        parts: List[str] = []
+        for line in raw:
+            stripped = line.strip()
+            if stripped.startswith("URL:"):
+                url = stripped.split(":", 1)[1].strip() or None
+            elif url is not None and " " not in stripped:
+                url += stripped
+            else:
+                parts.append(stripped)
+        text = join_wrapped(parts)
+        m = REFERENCE_RE.match(text)
+        if not m:
+            continue
+        citation = FUNDING_RE.sub("", text)
+        citation = re.sub(r"\.\s+\.", ".", citation)
+        citation = re.sub(r"\s+([.,])(?=\s|$)", r"\1", citation).strip()
+        entries.append(BibliographyEntry(
+            dataset=dataset,
+            entry_no=len(entries) + 1,
+            citation=citation,
+            url=url,
+            authors=m.group(1).strip(),
+            year=m.group(2),
+        ))
+    return entries
+
+
+def split_references(text: str) -> List[Tuple[List[str], str]]:
+    """'Teorell et al. (2019), Coppedge, Gerring & Ziblatt (2026)' -> name lists and years."""
+    refs: List[Tuple[List[str], str]] = []
+    for m in REFERENCE_RE.finditer(text):
+        authors = re.sub(r"^[\s,;]*(?:(?:and|&)\s+)?", "", m.group(1))
+        authors = re.sub(r"\bet al\.?", "", authors)
+        names = [n.strip() for n in re.split(r",|&|\band\b", authors) if n.strip()]
+        if names:
+            refs.append((names, m.group(2)))
+    return refs
+
+
+def resolve_reference(names: List[str], year: str, bibliography: List[BibliographyEntry]) -> List[BibliographyEntry]:
+    candidates = [
+        e for e in bibliography
+        if e.year == year and e.authors.casefold().startswith(names[0].casefold())
+    ]
+    if len(candidates) <= 1:
+        return candidates
+    # V-Dem's dataset and codebook are both "Coppedge ... (2026)", told apart only
+    # by who is on the author list.
+    def score(entry: BibliographyEntry) -> int:
+        authors = entry.authors.casefold()
+        return sum(1 for n in names if n.casefold() in authors)
+    best = max(score(e) for e in candidates)
+    return [e for e in candidates if score(e) == best]
+
+
+def link_citations(
+    entries: List[ParsedEntry], bibliography: List[BibliographyEntry]
+) -> Tuple[List[CitationLink], List[str]]:
+    links: Dict[Tuple[str, str, int], CitationLink] = {}
+    unresolved: List[str] = []
+    for e in entries:
+        for role, text in (("dataset", e.dataset_citation), ("variable", e.variable_citation)):
+            if not text:
+                continue
+            for names, year in split_references(text):
+                matches = resolve_reference(names, year, bibliography)
+                if not matches:
+                    unresolved.append(f"{e.dataset}: {names[0]} ({year}) in {e.long_tag}")
+                for match in matches:
+                    key = (e.long_tag, role, match.entry_no)
+                    links.setdefault(key, CitationLink(e.dataset, e.long_tag, match.entry_no, role))
+    return list(links.values()), sorted(set(unresolved))
+
+
+def write_rows(path: str, rows: List[object]) -> None:
+    fieldnames = list(rows[0].__dataclass_fields__) if rows else []
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: ("" if v is None else v) for k, v in vars(row).items()})
+
+
 def write_csv(entries: List[ParsedEntry], output_csv: str) -> None:
     fieldnames = [
         "dataset",
@@ -428,17 +700,43 @@ def main() -> None:
         required=True,
         help="Input pair as <text_path>::<source_pdf_path> (repeatable).",
     )
+    parser.add_argument("--sources-csv", help="Path to output CSV: one row per source dataset section.")
+    parser.add_argument("--bibliography-csv", help="Path to output CSV: one row per bibliography entry.")
+    parser.add_argument(
+        "--citations-csv",
+        help="Path to output CSV: which bibliography entries each variable entry cites.",
+    )
     args = parser.parse_args()
 
     all_entries: List[ParsedEntry] = []
+    all_sources: List[SourceDataset] = []
+    all_bibliography: List[BibliographyEntry] = []
+    all_links: List[CitationLink] = []
+    all_unresolved: List[str] = []
     for item in args.input:
         if "::" not in item:
             raise ValueError(f"Invalid --input value: {item}. Expected <text_path>::<source_pdf_path>")
         txt_path, source_pdf = item.split("::", 1)
         dataset = parse_dataset_key(source_pdf)
-        all_entries.extend(parse_text_file(txt_path, source_pdf, dataset))
+        entries = parse_text_file(txt_path, source_pdf, dataset)
+        all_entries.extend(entries)
+
+        with open(txt_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [normalize_line(line) for line in f]
+        all_sources.extend(parse_source_datasets(lines, source_pdf, dataset))
+        bibliography = parse_bibliography(lines, dataset)
+        all_bibliography.extend(bibliography)
+        links, unresolved = link_citations(entries, bibliography)
+        all_links.extend(links)
+        all_unresolved.extend(unresolved)
 
     write_csv(all_entries, args.output_csv)
+    if args.sources_csv:
+        write_rows(args.sources_csv, all_sources)
+    if args.bibliography_csv:
+        write_rows(args.bibliography_csv, all_bibliography)
+    if args.citations_csv:
+        write_rows(args.citations_csv, all_links)
 
     # Print a compact summary for operator visibility.
     per_dataset: Dict[str, int] = {}
@@ -446,6 +744,15 @@ def main() -> None:
         per_dataset[e.dataset] = per_dataset.get(e.dataset, 0) + 1
     summary = ", ".join(f"{k}={v}" for k, v in sorted(per_dataset.items()))
     print(f"Extracted variable metadata entries: {len(all_entries)} ({summary})")
+    print(
+        f"Extracted credits: {len(all_sources)} source datasets, "
+        f"{len(all_bibliography)} bibliography entries, {len(all_links)} citation links"
+    )
+    # A reference no bibliography entry answers to is a work the credits cannot
+    # name. scripts/build_attribution.sh fails if that leaves a dataset with no
+    # citation at all; anything short of that is reported here.
+    for line in all_unresolved:
+        print(f"  unresolved citation: {line}")
 
 
 if __name__ == "__main__":

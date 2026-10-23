@@ -80,10 +80,10 @@ is the register: Natural Earth (public domain), CShapes 2.0 and CShapes-Europe
 (CC BY-NC-SA 4.0), historical-basemaps (GPL-3.0).
 
 The indicator datasets (V-Dem, QoG, REPDEM), their codebook PDFs under
-`data/Demscore_Module_Vars/` and `webapp/assets/codebooks/`, and the Demscore
-wordmark belong to their respective providers. Each dataset requires citation as
-a condition of use; the citations are in the app's "Sources & licences" dialog
-and in `webapp/config/attribution_sources.json`.
+`data/Demscore_Module_Vars/`, and the Demscore wordmark belong to their
+respective providers. Each dataset requires citation as a condition of use; the
+citations are read out of each codebook and shown in the app's "Sources &
+licences" dialog.
 
 
 Where the credits come from

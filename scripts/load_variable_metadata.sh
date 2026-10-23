@@ -46,6 +46,9 @@ qog_txt="${tmp_dir}/qog_codebook.txt"
 repdem_txt="${tmp_dir}/repdem_codebook.txt"
 vdem_txt="${tmp_dir}/vdem_codebook.txt"
 raw_csv="${tmp_dir}/variable_metadata_raw.csv"
+sources_csv="${tmp_dir}/codebook_source_datasets.csv"
+bibliography_csv="${tmp_dir}/codebook_bibliography.csv"
+citations_csv="${tmp_dir}/codebook_citations.csv"
 
 echo "Extracting PDF text..."
 run_tool sh -euc '
@@ -59,6 +62,9 @@ echo "Parsing codebook entries..."
 # given as the container sees them: repository-relative, the same on any host.
 run_tool python3 scripts/extract_variable_metadata.py \
   --output-csv "$(tool_path "$raw_csv")" \
+  --sources-csv "$(tool_path "$sources_csv")" \
+  --bibliography-csv "$(tool_path "$bibliography_csv")" \
+  --citations-csv "$(tool_path "$citations_csv")" \
   --input "$(tool_path "$qog_txt")::data/Demscore_Module_Vars/QoG/codebook.pdf" \
   --input "$(tool_path "$repdem_txt")::data/Demscore_Module_Vars/REPDEM/codebook.pdf" \
   --input "$(tool_path "$vdem_txt")::data/Demscore_Module_Vars/V-Dem/codebook.pdf"
@@ -68,6 +74,9 @@ echo "Copying parsed metadata into DB container..."
 # docker-compose that some servers run as podman's provider has no `cp`, and
 # answers it with its help text and a failure.
 podman compose exec -T db sh -c 'cat > /tmp/variable_metadata_raw.csv' < "$raw_csv"
+podman compose exec -T db sh -c 'cat > /tmp/codebook_source_datasets.csv' < "$sources_csv"
+podman compose exec -T db sh -c 'cat > /tmp/codebook_bibliography.csv' < "$bibliography_csv"
+podman compose exec -T db sh -c 'cat > /tmp/codebook_citations.csv' < "$citations_csv"
 
 echo "Loading variable metadata into PostgreSQL..."
 podman compose exec -T db psql -U demscore -d demscore -v ON_ERROR_STOP=1 -f - <<'SQL'
@@ -108,6 +117,56 @@ CREATE TABLE demscore.variable_metadata_raw (
 
 COPY demscore.variable_metadata_raw
 FROM '/tmp/variable_metadata_raw.csv'
+WITH (FORMAT csv, HEADER true);
+
+-- Who to cite for the data, read from the same codebooks. scripts/build_attribution.sh
+-- turns these into the indicator credits: the bibliography entries the visible
+-- variables cite, plus any no variable entry cites (V-Dem's measurement model is
+-- cited from the dataset description only), minus those cited only by variables
+-- the map does not show. Keyed by the codebook's long tag rather than by
+-- demscore.variables, because the citations are parsed before the matching below.
+DROP TABLE IF EXISTS demscore.codebook_source_datasets;
+CREATE TABLE demscore.codebook_source_datasets (
+  dataset TEXT NOT NULL,
+  source_pdf TEXT NOT NULL,
+  project_name TEXT,
+  project_url TEXT,
+  dataset_tag TEXT NOT NULL,
+  title TEXT,
+  license TEXT,
+  PRIMARY KEY (dataset, dataset_tag)
+);
+COPY demscore.codebook_source_datasets
+FROM '/tmp/codebook_source_datasets.csv'
+WITH (FORMAT csv, HEADER true);
+
+DROP TABLE IF EXISTS demscore.codebook_bibliography;
+CREATE TABLE demscore.codebook_bibliography (
+  dataset TEXT NOT NULL,
+  entry_no INTEGER NOT NULL,
+  citation TEXT NOT NULL,
+  url TEXT,
+  authors TEXT NOT NULL,
+  year TEXT NOT NULL,
+  PRIMARY KEY (dataset, entry_no)
+);
+COPY demscore.codebook_bibliography
+FROM '/tmp/codebook_bibliography.csv'
+WITH (FORMAT csv, HEADER true);
+
+-- role: 'dataset' for a codebook entry's "Dataset citation", 'variable' for its
+-- "Variable citation" -- the original source a single indicator was taken from.
+DROP TABLE IF EXISTS demscore.codebook_citations;
+CREATE TABLE demscore.codebook_citations (
+  dataset TEXT NOT NULL,
+  long_tag TEXT NOT NULL,
+  entry_no INTEGER NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('dataset', 'variable')),
+  PRIMARY KEY (dataset, long_tag, entry_no, role),
+  FOREIGN KEY (dataset, entry_no) REFERENCES demscore.codebook_bibliography (dataset, entry_no)
+);
+COPY demscore.codebook_citations
+FROM '/tmp/codebook_citations.csv'
 WITH (FORMAT csv, HEADER true);
 
 CREATE TABLE IF NOT EXISTS demscore.variable_metadata (
@@ -738,6 +797,7 @@ LIMIT 40;
 SQL
 
 echo "Cleaning temporary file from DB container..."
-podman compose exec -T db sh -lc "rm -f /tmp/variable_metadata_raw.csv"
+podman compose exec -T db sh -lc "rm -f /tmp/variable_metadata_raw.csv /tmp/codebook_source_datasets.csv \
+  /tmp/codebook_bibliography.csv /tmp/codebook_citations.csv"
 
 echo "Variable metadata load complete."

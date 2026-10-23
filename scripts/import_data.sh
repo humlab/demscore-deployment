@@ -8,7 +8,7 @@
 #                (scripts/import_data_report.py preflight)
 #   2. back up   the current data tables, so a failed import can be undone
 #   3. load      the CSVs (scripts/load_demscore_module_vars.sh), one transaction
-#   4. metadata  titles and descriptions from the codebooks
+#   4. metadata  titles, descriptions and citations from the codebooks
 #                (scripts/load_variable_metadata.sh)
 #   5. map       country matching, hex mesh, coverage strips, credits and
 #                smoke tests (scripts/setup_mapserver_hex_service.sh)
@@ -67,8 +67,8 @@ Options:
   --verbose      Show every step's output, not only the summary
   -h, --help     Show this help
 
-Exit status: 0 imported, 2 imported but the codebook metadata did not load,
-1 failed (the summary says whether the previous data was kept or restored).
+Exit status: 0 imported, 1 failed (the summary says whether the previous data
+was kept or restored).
 USAGE
 }
 
@@ -392,7 +392,8 @@ backup_current_data() {
     SELECT string_agg('demscore.' || n, ' ')
     FROM (VALUES ('variables'), ('dataset_values'), ('variable_metadata'),
                  ('variable_metadata_raw'), ('import_source_report'),
-                 ('import_column_report')) t(n)
+                 ('import_column_report'), ('codebook_source_datasets'),
+                 ('codebook_bibliography'), ('codebook_citations')) t(n)
     WHERE to_regclass('demscore.' || n) IS NOT NULL")" || return 1
   if [[ -z "$tables" || " $tables " != *" demscore.variables "* ]]; then
     echo "No indicator data in the database yet; nothing to back up."
@@ -420,6 +421,8 @@ restore_previous_data() {
       # CASCADE for the foreign keys between them; the map step rebuilds
       # every other object that reads them.
       echo "DROP TABLE IF EXISTS demscore.variable_metadata, demscore.variable_metadata_raw,"
+      echo "  demscore.codebook_source_datasets, demscore.codebook_bibliography,"
+      echo "  demscore.codebook_citations,"
       echo "  demscore.import_column_report, demscore.import_source_report,"
       echo "  demscore.dataset_values, demscore.variables CASCADE;"
       gunzip -c
@@ -609,14 +612,14 @@ if ! run_stage load "Load CSV files" "${ROOT_DIR}/scripts/load_demscore_module_v
   exit 1
 fi
 
-metadata_ok=1
+# Not optional: the codebooks are where the credits' citations are read from,
+# and the map step's attribution build fails without them, so there is no point
+# spending its minutes first.
 if ! run_stage metadata "Load codebook metadata" "${ROOT_DIR}/scripts/load_variable_metadata.sh"; then
-  metadata_ok=0
-  if (( INTERRUPTED )); then
-    print_summary
-    offer_restore
-  fi
-  echo "    (carrying on: the map does not need the codebooks)"
+  print_summary
+  echo
+  echo "The codebooks could not be read, and the citations every dataset asks for come from them."
+  offer_restore
 fi
 
 (( VERBOSE || PROGRESS )) || echo "    the map step takes several minutes; follow it with: tail -f ${RUN_DIR_REL}/map.log"
@@ -630,8 +633,4 @@ remove_backup
 trap - INT TERM
 
 offer_preload
-
-if (( ! metadata_ok )); then
-  exit 2
-fi
 exit 0

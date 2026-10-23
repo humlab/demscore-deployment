@@ -19,25 +19,24 @@ const CACHE_ENABLED = isTruthy(process.env.DEMSCORE_ENABLE_MAPCACHE || "0");
 // carries the same columns as `data/Demscore_Module_Vars/<module>`, alongside
 // that module's codebook and the Demscore methodology PDF. So the link is
 // per-dataset, and a variable's card offers its dataset's download.
+//
+// The codebook link is not here: see fetchCodebookLinks().
 const DATASET_META = {
   qog: {
     label: "QoG",
     title: "Quality of Government",
-    codebook: "./assets/codebooks/qog-codebook.pdf",
     download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=81929b1e-8ab2-4409-a3e1-ffaff751c039",
     defaultVariable: "qog_std_ts_ti_cpi",
   },
   repdem: {
     label: "REPDEM",
     title: "Representative Democracy",
-    codebook: "./assets/codebooks/repdem-codebook.pdf",
     download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=2ee386d8-5059-4111-b43f-19a42c662840",
     defaultVariable: "repdem_basic_enpp",
   },
   v_dem: {
     label: "V-Dem",
     title: "Varieties of Democracy",
-    codebook: "./assets/codebooks/v-dem-codebook.pdf",
     download: "https://www.demscore.se/data_analysis/menu_by_id?download_id=1dfe5c25-dcba-4b8d-808d-49269a1336f6",
     defaultVariable: "v2x_polyarchy",
   },
@@ -45,7 +44,7 @@ const DATASET_META = {
 
 // How a dataset presents itself, as opposed to what it contains. The database
 // supplies the variables and the year span; these come from config.
-const DATASET_PRESENTATION_KEYS = ["label", "title", "description", "color", "palette", "codebook", "download", "image"];
+const DATASET_PRESENTATION_KEYS = ["label", "title", "description", "color", "palette", "download", "image"];
 
 // Mirrors the mapfile's own VALIDATION block for these parameters.
 const VARIABLE_KEY_PATTERN = /^[A-Za-z0-9_]+$/;
@@ -182,6 +181,7 @@ async function fetchVariablesConfigFromDb() {
     return null;
   }
 
+  const codebooks = await fetchCodebookLinks();
   const datasets = {};
   for (const row of result.rows) {
     const datasetKey = row.dataset;
@@ -195,7 +195,7 @@ async function fetchVariablesConfigFromDb() {
       label: fallbackMeta.label || datasetKey,
       title: fallbackMeta.title || fallbackMeta.label || datasetKey,
       color: fallbackMeta.color,
-      codebook: fallbackMeta.codebook,
+      codebook: codebooks[datasetKey],
       download: fallbackMeta.download,
       defaultVariable,
       yearMin: Number.isInteger(row.year_min) ? row.year_min : DEFAULTS.year,
@@ -220,6 +220,35 @@ async function fetchVariablesConfigFromDb() {
     },
     datasets,
   };
+}
+
+// Each module's codebook is served straight out of data/Demscore_Module_Vars
+// (the `web` container mounts it under /codebooks/), so the PDF a reader opens
+// is the one the import read the variable titles and the credits from, and a
+// new export's codebook is served as soon as it is dropped in beside its
+// data.csv. variable_metadata.source_pdf records which file that was.
+async function fetchCodebookLinks() {
+  let result;
+  try {
+    result = await pool.query(`
+      SELECT dataset, min(source_pdf) AS source_pdf
+      FROM demscore.variable_metadata
+      GROUP BY dataset
+    `);
+  } catch (error) {
+    // No codebook has been loaded yet; the map works without one.
+    if (error.code === "42P01") return {};
+    throw error;
+  }
+
+  const links = {};
+  for (const row of result.rows) {
+    // Same pattern the web container's nginx serves, so a link is never offered
+    // for a file it would refuse.
+    const match = /Demscore_Module_Vars\/([A-Za-z0-9_-]+)\/codebook\.pdf$/.exec(row.source_pdf || "");
+    if (match) links[row.dataset] = `./codebooks/${match[1]}/codebook.pdf`;
+  }
+  return links;
 }
 
 // `DATASET_META` is only a built-in default. `webapp/config/variables.json` is
