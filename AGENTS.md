@@ -230,6 +230,9 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - `README.md` and `docs/operations.md`: the documentation for whoever runs the stack.
   The README is a quickstart -- what the system is, the commands, the settings -- and
   stays that short; detail on what each command does goes in `docs/operations.md`
+- `docs/tech-stack.md`: the component overview for developers -- what each service is and
+  how a request and an import flow through them. A summary of this file; update it when a
+  service, a SQL entry point or the import steps change
 - `scripts/import_data.sh`: what `./deploy.sh import-data` and `install` run -- check,
   back up, load, codebooks, map, summary, preload offer (see section 2, step 0). It
   collects what the summary needs from the database itself (`collect_db_facts`, one

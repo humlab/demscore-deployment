@@ -60,4 +60,5 @@ is licensed CC BY-NC-SA 4.0. See [LICENSE](LICENSE).
 ## More
 
 - [docs/operations.md](docs/operations.md): what each command does, in detail
+- [docs/tech-stack.md](docs/tech-stack.md): the components and how they fit together
 - [AGENTS.md](AGENTS.md): architecture and developer guidelines
