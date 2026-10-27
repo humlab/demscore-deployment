@@ -15,7 +15,8 @@ usage() {
   echo "Usage: $0 <command>"
   echo ""
   echo "Commands:"
-  echo "  install   Generate credentials, start services, and load all data"
+  echo "  install   Check out the web app, generate credentials, start services,"
+  echo "            and load all data"
   echo "  import-data [--yes] [--preload N | --no-preload] [--verbose]"
   echo "            Replace the data with the files in data/Demscore_Module_Vars,"
   echo "            rebuild the map, print a summary, and offer to preload tiles"
@@ -78,7 +79,8 @@ ensure_env() {
   done
 }
 
-# The host needs bash, curl and podman. Everything else -- Python, pdftotext,
+# The host needs bash, curl, podman and a compose provider for it (git too, to
+# check out the web app on install). Everything else -- Python, pdftotext,
 # Node, GDAL, psql -- runs in containers.
 check_deps() {
   local missing=()
@@ -91,6 +93,54 @@ check_deps() {
     echo "ERROR: Missing required dependencies: ${missing[*]}" >&2
     exit 1
   fi
+  check_compose
+}
+
+# `podman compose` hands every command to a separate program, docker-compose or
+# podman-compose, and installing podman installs neither. docker-compose also
+# reaches podman through its API socket, which is off until enabled. Without
+# this check either gap surfaces as the first service failing to start.
+check_compose() {
+  local output
+  if output="$(podman compose ps 2>&1)"; then
+    return 0
+  fi
+  echo "ERROR: 'podman compose' does not work on this host:" >&2
+  sed 's/^/  /' <<< "$output" >&2
+  cat >&2 <<'EOF'
+
+It needs docker-compose or podman-compose installed. docker-compose also needs
+podman's API socket running:
+  systemctl --user enable --now podman.socket
+(as root: systemctl enable --now podman.socket)
+EOF
+  exit 1
+}
+
+# webapp/ is a git submodule (humlab/demscore-web), and a plain `git clone`
+# leaves it empty. Checks out every submodule that is missing, at the commit
+# this repository pins. One already checked out is left where it is, even at
+# another commit: on a working copy that is someone's work in progress, and
+# `git submodule update` would move it onto a detached HEAD.
+ensure_submodules() {
+  local status path
+  [[ -f .gitmodules ]] || return 0
+  if ! command -v git &>/dev/null || ! git rev-parse --is-inside-work-tree &>/dev/null; then
+    echo "WARNING: not a git checkout (or git is missing); cannot check out submodules." >&2
+    return 0
+  fi
+  while read -r status path _; do
+    case "$status" in
+      -*)
+        echo "Checking out submodule ${path}..."
+        git submodule update --init --recursive -- "$path"
+        ;;
+      +*)
+        echo "WARNING: ${path} is not at the commit this repository pins; leaving it as it is." >&2
+        echo "         To move it there: git submodule update -- ${path}" >&2
+        ;;
+    esac
+  done < <(git submodule status)
 }
 
 # ---------------------------------------------------------------------------
@@ -99,6 +149,8 @@ check_deps() {
 
 cmd_install() {
   check_deps
+
+  ensure_submodules
 
   ensure_env
 

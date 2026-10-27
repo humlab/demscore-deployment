@@ -220,8 +220,8 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - Frontend: Vanilla JS + OpenLayers 10.10.0 + proj4 2.22.0 + static HTML/CSS
 - GIS import tooling: `ogr2ogr`, in the `gdal` container
 - Script helpers: Python 3, poppler's `pdftotext` and Node, in the `tools` container
-  (`tools/Containerfile`, `localhost/demscore-tools:2`). The host needs bash, curl and
-  podman and nothing else; nothing on the deploy path may call Python, Node, pdftotext,
+  (`tools/Containerfile`, `localhost/demscore-tools:2`). The host needs bash, curl, git
+  and podman with a compose provider and nothing else; nothing on the deploy path may call Python, Node, pdftotext,
   `psql` or `ogr2ogr` on the host
 
 ## 4) Repository Map
@@ -498,9 +498,15 @@ cut in — see the note above `hex_variable_mercator` in the mapfile.
 
 ### Prerequisites
 
-- `podman` + compose support
+- `podman` + a compose provider: `docker-compose` (which also needs podman's API socket,
+  `systemctl --user enable --now podman.socket`) or `podman-compose`. `podman compose`
+  only hands off to one, and podman ships neither; `deploy.sh` checks for it (`check_compose`)
 - `curl`
+- `git`, which `./deploy.sh install` uses to check out the `webapp` submodule
+  (`humlab/demscore-web`) when a plain clone left it empty
 - bash. Everything else runs in containers (`gdal`, `tools`, `node:24-alpine`)
+- Image names in `compose.yml` carry their registry (`docker.io/...`): podman resolves a
+  short name only where the host configures a search registry, and a stock Ubuntu does not
 
 ### Typical startup
 

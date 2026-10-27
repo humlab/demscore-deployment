@@ -7,15 +7,27 @@ The [README](../README.md) is the short version.
 
 `./deploy.sh install`:
 
-1. creates `.env` from `.env.example` and fills in random `POSTGRES_PASSWORD`
+1. checks out the web app (`webapp/`, the `humlab/demscore-web` repository) at
+   the commit this repository pins, if it is not checked out yet. One that is
+   already checked out is left as it is, with a warning if it is at another
+   commit
+2. creates `.env` from `.env.example` and fills in random `POSTGRES_PASSWORD`
    and `DEMSCORE_READER_PASSWORD`
-2. builds the web app and the web backend image and starts every service
-3. runs the same import as `./deploy.sh import-data` (below), without asking
+3. builds the web app and the web backend image and starts every service
+4. runs the same import as `./deploy.sh import-data` (below), without asking
    first, since there is no earlier data to replace
 
-Only `bash`, `curl` and `podman` are needed on the host. Python, pdftotext,
-Node and GDAL run in containers; the first run builds a small tools image for
-them (`tools/Containerfile`).
+Only `bash`, `curl`, `git` and `podman` with a compose provider are needed on
+the host. `podman compose` hands its work to `docker-compose` or
+`podman-compose`, neither of which comes with podman; `docker-compose` also
+needs podman's API socket (`systemctl --user enable --now podman.socket`).
+Every command that starts or talks to the services checks this first. Python,
+pdftotext, Node and GDAL run in containers; the first run builds a small tools
+image for them (`tools/Containerfile`).
+
+Most of the time goes on building the map: about 20 minutes on a 24-core
+machine, longer on a smaller one. A first install also pulls six images and
+builds two before that.
 
 ## Starting and stopping
 

@@ -5,16 +5,36 @@ interactive hexagon map of the world.
 
 ## Requirements
 
-- `bash`, `curl` and `podman` with compose support
+- `bash`, `curl`, `git` and `podman`
+- A compose provider for podman: `docker-compose`, with podman's API socket
+  running (`systemctl --user enable --now podman.socket`), or `podman-compose`
 - About 10 GB of disk, plus room for the tile cache (up to 100 GB by default)
 
 ## Install
 
 ```bash
+git clone https://github.com/humlab/demscore-deployment.git
+cd demscore-deployment
 ./deploy.sh install
 ```
 
-The map is then at <http://127.0.0.1:8090>.
+Installing takes 20 minutes or more, most of it spent building the map. The
+map is then at <http://127.0.0.1:8090>.
+
+## Keeping it running
+
+Under rootless podman, the services stop when the user who started them logs
+out, and nothing starts them again after a reboot. Run this once, as that
+user:
+
+```bash
+sudo loginctl enable-linger "$USER"
+systemctl --user enable podman-restart.service
+```
+
+Lingering keeps the user's services running without anyone logged in, and
+`podman-restart.service` starts the containers at boot. When podman runs as
+root, only `systemctl enable podman-restart.service` is needed.
 
 ## Serving it publicly
 
