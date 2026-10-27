@@ -7,8 +7,9 @@ The [README](../README.md) is the short version.
 
 `./deploy.sh install`:
 
-1. creates `.env` from `.env.example` and fills in a random `POSTGRES_PASSWORD`
-2. builds the web app and starts every service
+1. creates `.env` from `.env.example` and fills in random `POSTGRES_PASSWORD`
+   and `DEMSCORE_READER_PASSWORD`
+2. builds the web app and the web backend image and starts every service
 3. runs the same import as `./deploy.sh import-data` (below), without asking
    first, since there is no earlier data to replace
 
@@ -18,13 +19,33 @@ them (`tools/Containerfile`).
 
 ## Starting and stopping
 
-`./deploy.sh start` rebuilds the web app and starts the services. Run it after
-changing `.env` or anything under `webapp/`. `./deploy.sh stop` stops the
-services, and `./deploy.sh status` lists them.
+`./deploy.sh start` rebuilds the web app and the web backend image and starts
+the services. Run it after changing `.env`, anything under `webapp/`, or
+`web-backend/`. `./deploy.sh stop` stops the services, and `./deploy.sh status`
+lists them.
 
-`POSTGRES_PASSWORD` is stored in the database volume when the volume is first
-created. If you change it in `.env` later, `./deploy.sh start` updates the
-database to match.
+The database has two roles. `demscore` owns the data and is what the import
+uses; `demscore_reader` is what MapServer and the web backend query as, and it
+can only read. On every start, `./deploy.sh start` gives each the password
+`.env` names (`POSTGRES_PASSWORD`, `DEMSCORE_READER_PASSWORD`), generating any
+that is missing, and updates the PostGIS extensions in the database volume to
+the version the database image carries. The database has no published port.
+
+## Serving it publicly
+
+The router serves plain HTTP. Put a reverse proxy that terminates TLS in front
+of it and forwards every path to `DEMSCORE_ROUTER_PORT`;
+`deploy/nginx-vhost.conf.example` is one for nginx, including HSTS. Firewall
+the port so only the proxy can reach it.
+
+The router limits each client to 50 tile requests and 20 API requests a
+second, queueing short bursts and answering 429 beyond them. It identifies the
+client by the last address in `X-Forwarded-For`, believed only from the
+addresses in `DEMSCORE_TRUSTED_PROXY_CIDRS` (default: loopback and the private
+ranges). If the proxy is on another host with a public address, add it there,
+or every reader is counted as the proxy. Requests that arrive from a private
+address without a forwarded client, such as `./deploy.sh preload` on the host,
+are not limited.
 
 ## Importing data
 
@@ -93,17 +114,20 @@ before the import can succeed.
 
 ## Tile cache
 
-With `DEMSCORE_ENABLE_MAPCACHE=1`, rendered map tiles are cached on the server
-and in readers' browsers. With `0`, every tile is rendered on request.
+Rendered map tiles are cached on the server and in readers' browsers. This is
+the default (`DEMSCORE_ENABLE_MAPCACHE=1`); with `0`, every tile is rendered on
+request.
 
 | Setting | Default | |
 | --- | --- | --- |
+| `DEMSCORE_ENABLE_MAPCACHE` | `1` | `0` turns the cache off |
 | `DEMSCORE_MAPCACHE_MAX_SIZE` | `100g` | Largest the server cache may grow (nginx `k`/`m`/`g` suffixes) |
+| `DEMSCORE_MAPCACHE_MIN_FREE` | `10g` | Free space the cache always leaves on its disk |
 | `DEMSCORE_MAPCACHE_TTL_SECONDS` | `86400` (24 h) | How long a tile is served before it is rendered again, on the server and in the browser |
 
-When the server cache reaches its size limit, nginx removes the
-least-recently-used tiles, and any tile not requested for 24 hours. The disk
-must have room for the full limit.
+When the server cache reaches its size limit, or the disk has less than
+`DEMSCORE_MAPCACHE_MIN_FREE` left, nginx removes the least-recently-used tiles.
+It also removes any tile not requested for 24 hours.
 
 ### Preloading
 

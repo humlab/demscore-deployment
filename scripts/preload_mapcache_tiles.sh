@@ -127,7 +127,7 @@ if ! command -v curl >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ "${DEMSCORE_ENABLE_MAPCACHE:-0}" != "" ]] && ! is_truthy "${DEMSCORE_ENABLE_MAPCACHE:-0}"; then
+if [[ "${DEMSCORE_ENABLE_MAPCACHE:-1}" != "" ]] && ! is_truthy "${DEMSCORE_ENABLE_MAPCACHE:-1}"; then
   echo "DEMSCORE_ENABLE_MAPCACHE is not enabled in .env."
   echo "Enable it first (DEMSCORE_ENABLE_MAPCACHE=1), then run ./scripts/start_services.sh."
   exit 1

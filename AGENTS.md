@@ -209,13 +209,18 @@ The system turns tabular democracy indicator data into a thematic global hex map
 ## 3) Tech Stack
 
 - Container orchestration: `podman compose` workflow (Compose file is Docker Compose format)
-- Database: PostgreSQL 16 + PostGIS 3.4 (`postgis/postgis:16-3.4`)
-- Spatial server: MapServer 8.4 (`camptocamp/mapserver:8.4`)
-- Web server: Nginx 1.27 Alpine (`nginx:1.27-alpine`)
+- Database: PostgreSQL 16 + PostGIS 3.6 (`postgis/postgis:16-3.6`). The major stays at 16
+  because a new major cannot open the existing `pg_data` volume; a PostGIS minor bump is
+  applied to the volume, with any collation change, by `scripts/upgrade_db_volume.sh` on
+  the next start
+- Spatial server: MapServer 8.6 (`camptocamp/mapserver:8.6`)
+- Web server: Nginx 1.30 Alpine (`nginx:1.30-alpine`, the stable branch)
+- Web backend: Node 24 + Express 4, built into `localhost/demscore-web-backend` from
+  `web-backend/Containerfile` (`npm ci` from the lockfile at build time, runs as `node`)
 - Frontend: Vanilla JS + OpenLayers 10.10.0 + proj4 2.22.0 + static HTML/CSS
 - GIS import tooling: `ogr2ogr`, in the `gdal` container
 - Script helpers: Python 3, poppler's `pdftotext` and Node, in the `tools` container
-  (`tools/Containerfile`, `localhost/demscore-tools:1`). The host needs bash, curl and
+  (`tools/Containerfile`, `localhost/demscore-tools:2`). The host needs bash, curl and
   podman and nothing else; nothing on the deploy path may call Python, Node, pdftotext,
   `psql` or `ogr2ogr` on the host
 
@@ -250,10 +255,11 @@ The system turns tabular democracy indicator data into a thematic global hex map
   see paths inside it; scratch files go to `state/tmp/`
 - `state/` (git-ignored): import runs, the scratch space above, and `map_build_id`
 - `scripts/start_services.sh`: what `./deploy.sh start` and `install` run. Builds
-  `webapp/dist`, starts every service, then calls `sync_db_password.sh`. `mapcache` is
+  `webapp/dist` and the web backend image, starts every service, then calls
+  `upgrade_db_volume.sh` and `sync_db_roles.sh`. `mapcache` is
   always started; `DEMSCORE_ENABLE_MAPCACHE` in `.env` decides whether it caches tiles or
   passes them straight through
-- `scripts/build_webapp.sh`: builds `webapp/dist` (webpack) inside a throwaway `node:20-alpine`
+- `scripts/build_webapp.sh`: builds `webapp/dist` (webpack) inside a throwaway `node:24-alpine`
   container, so a host needs podman and not Node. Run by `start_services.sh` before nginx starts,
   so a change under `webapp/` is served after the next `./deploy.sh start`: the `web` container
   serves `dist`, not the source. For rebuild-on-save while working on the client, `npm run dev`
@@ -261,8 +267,19 @@ The system turns tabular democracy indicator data into a thematic global hex map
   timestamp written by every map setup run -- into the build, which stamps it into the
   service worker's tile cache name (`MAP_BUILD_ID` in `webapp/sw.js`), so readers'
   browsers drop the old tiles after an import or a mesh rebuild
-- `scripts/sync_db_password.sh`: `ALTER ROLE` over the trusted unix socket so the `demscore`
-  role's password matches `POSTGRES_PASSWORD` in `.env`
+- `scripts/sync_db_roles.sh`: over the trusted unix socket, gives the `demscore` superuser
+  `POSTGRES_PASSWORD` from `.env`, and creates or updates `demscore_reader` -- the role
+  `mapserver` and `web-backend` connect as -- with `DEMSCORE_READER_PASSWORD`, read-only
+  transactions, a 30 s `statement_timeout`, and SELECT on the `demscore` schema, granted both
+  on what is there and as a default privilege on what `demscore` creates there later (every
+  import recreates the tables). `./deploy.sh start` and `install` generate either password
+  when `.env` lacks it
+- `scripts/upgrade_db_volume.sh`: brings the existing `pg_data` volume up to the db image it
+  now runs under. `ALTER EXTENSION ... UPDATE` for every extension behind what the image
+  ships, and, when the image's C library sorts text differently from the one the database
+  was created under, `REINDEX DATABASE` then `REFRESH COLLATION VERSION` (refreshing alone
+  would only silence the warning over indexes still in the old order). Moving from 16-3.4
+  to 16-3.6 was both: PostGIS 3.4.3 to 3.6.4, glibc 2.31 to 2.41. A no-op otherwise
 - `scripts/extract_variable_metadata.py`: robust parser for codebook text blocks and variable metadata fields
 - `scripts/load_variable_metadata.sh`: PDF-to-DB metadata load pipeline for variable titles/citations/descriptions
 - `scripts/setup_mapserver_hex_service.sh`: full environment + geometry + SQL setup + smoke tests
@@ -360,7 +377,21 @@ The system turns tabular democracy indicator data into a thematic global hex map
   REPDEM variable collapses into one. `topic_classification.wip.md` has the counts and method
 - `mapcache/cache-enabled.conf`, `mapcache/cache-disabled.conf`: reverse-proxy WMS gateway
   configs; the same `/mapserver` route passes through or caches tiles based on
-  `DEMSCORE_ENABLE_MAPCACHE`
+  `DEMSCORE_ENABLE_MAPCACHE`. The cache key is the whole query, which is safe only because
+  the router has already rebuilt it (next entry)
+- `router/nginx.conf`: the one published port, and the security boundary. Plain HTTP behind a
+  TLS reverse proxy (`deploy/nginx-vhost.conf.example`, which adds HSTS). It takes the client
+  address from `X-Forwarded-For` when the connection comes from `DEMSCORE_TRUSTED_PROXY_CIDRS`,
+  rate-limits per client (`/mapserver` 50 r/s, `/api` 20 r/s, short bursts queued, then 429;
+  requests from private addresses with no forwarded client, i.e. the host's own preloader, are
+  exempt), sets the security headers including the CSP, forwards exactly `/mapserver` and
+  nothing below it, and rebuilds that request's query from a fixed list of parameters in a
+  fixed order with `map` pinned. That last is what keeps the tile cache honest: a cached tile
+  is stored under exactly the query that drew it, so an extra parameter (`SLD_BODY`) or a
+  repeated one (`year=2020&year=1900`) cannot put a different picture under an ordinary key
+- `mapserver/apache/demscore-hardening.conf`: mounted into the MapServer container's Apache.
+  The camptocamp image serves its extended status page at `/server-status-remote` to anyone;
+  this denies it and drops the version banner
 - `data/`: input datasets + reference boundaries
 - `data/reference/`: Natural Earth 50m boundaries — `ne_50m_admin_0_countries.geojson`
   (identity + web-backend land basemap), `ne_50m_admin_0_map_units.geojson` (hex geometry),
@@ -380,9 +411,10 @@ The system turns tabular democracy indicator data into a thematic global hex map
 - Web app: `http://127.0.0.1:8090` (port set by `DEMSCORE_ROUTER_PORT` in `.env`,
   default `8090`)
 - MapServer WMS via router/cache gateway: `http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map`
-- Server-side tile caching: set `DEMSCORE_ENABLE_MAPCACHE=1` in `.env`; with `0`,
+- Server-side tile caching: on by default (`DEMSCORE_ENABLE_MAPCACHE=1` in `.env`); with `0`,
   the same route is a no-store pass-through for development
-- PostgreSQL: `127.0.0.1:5532` (db/user/password default: `demscore`)
+- PostgreSQL: not published. Scripts use `podman compose exec db psql` as `demscore`; services
+  connect over the compose network as `demscore_reader`
 
 ### Web backend endpoints
 
@@ -444,6 +476,12 @@ Accepted parameters for `hex_variable` and `hex_outline`:
   per scheme and polarity in the `DATA` query; see `mapserver/README.md` and
   `webapp/src/core/palettes.js`
 
+These, and the standard WMS parameters the app sends (`SERVICE`, `VERSION`, `REQUEST`,
+`LAYERS`, `STYLES`, `FORMAT`, `TRANSPARENT`, `SRS`/`CRS`, `BBOX`, `WIDTH`, `HEIGHT`), are the
+only parameters the router forwards; anything else on the request never reaches MapServer.
+The mapfile enables `GetMap` and `GetCapabilities` only, refuses SLD (`wms_sld_enabled`), and
+caps an image at 1024 pixels a side (`MAXSIZE`; the app's tiles are 512).
+
 MapServer applies validation defaults; SQL additionally clamps:
 
 - year: `1500..2100`
@@ -462,13 +500,13 @@ cut in — see the note above `hex_variable_mercator` in the mapfile.
 
 - `podman` + compose support
 - `curl`
-- bash. Everything else runs in containers (`gdal`, `tools`, `node:20-alpine`)
+- bash. Everything else runs in containers (`gdal`, `tools`, `node:24-alpine`)
 
 ### Typical startup
 
 Set cache toggle in `.env`:
-- `DEMSCORE_ENABLE_MAPCACHE=0` (no server/browser tile cache)
-- `DEMSCORE_ENABLE_MAPCACHE=1` (enable server/browser tile cache)
+- `DEMSCORE_ENABLE_MAPCACHE=1` (server and browser tile cache; the default)
+- `DEMSCORE_ENABLE_MAPCACHE=0` (no server/browser tile cache, for development)
 
 - First time: `./deploy.sh install` -- generates `.env`, starts services, loads the
   datasets and sets up the map-ready DB objects
@@ -640,10 +678,20 @@ Setup, as part of `install`, also checks:
 
 - Update `mapserver/mapserver.map` for style/class behaviour.
 - Keep WMS validation regex aligned with backend expectations.
-- If adding request params, update both:
+- If adding request params, update all of:
   - MapServer `VALIDATION`
   - SQL function signature/logic
   - Frontend request builder
+  - the parameter list in `router/nginx.conf` (a `map` and its place in `$wms_query`). A
+    parameter missing there is silently dropped before MapServer sees it
+- The tile cache trusts the router to have rebuilt the query. Do not route WMS requests to
+  `mapcache` any other way, and do not widen `location = /mapserver` to a prefix: the
+  MapServer container answers other paths (Apache's status page among them)
+- A table, view or function a WMS layer or `web-backend` reads must be readable by
+  `demscore_reader`. Anything `demscore` creates in the `demscore` schema is, by default
+  privilege; anything in another schema needs its own grant in `scripts/sync_db_roles.sh`.
+  It also runs read-only with a 30 s `statement_timeout`, so a layer query cannot write
+  (no temporary tables) and must finish inside that
 
 ### Frontend changes
 
@@ -756,9 +804,10 @@ Before merging changes:
   it. Nothing in `scripts/` notices, because they all reach the database as
   `podman compose exec db psql`, over the unix socket the postgres image's `pg_hba.conf`
   trusts. The mismatch surfaces only where a container connects over TCP, which
-  scram-sha-256 guards -- `ogr2ogr` in the setup script first, then `mapserver` and
-  `web-backend` -- as `password authentication failed for user "demscore"`.
-  `scripts/sync_db_password.sh`, run on every `./deploy.sh start`, reconciles the two.
+  scram-sha-256 guards -- `ogr2ogr` in the setup script -- as
+  `password authentication failed for user "demscore"`. `scripts/sync_db_roles.sh`, run on
+  every `./deploy.sh start`, reconciles the two, and does the same for `demscore_reader`,
+  which is where `mapserver` and `web-backend` would fail the same way.
 - No automated test suite currently exists; scripts provide operational smoke tests only.
 - The map is a WMS image, so nothing in it can be reached by assistive technology. The
   non-visual equivalent -- `#mapSummary` and `#mapAnnouncer` in

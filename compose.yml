@@ -1,11 +1,12 @@
 services:
   router:
-    image: nginx:1.27-alpine
+    image: nginx:1.30-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-router
     depends_on:
       - web
       - mapcache
       - web-backend
+    # Plain HTTP. TLS is the job of the reverse proxy in front (README.md).
     ports:
       - "${DEMSCORE_ROUTER_PORT:-8090}:80"
     command:
@@ -14,20 +15,28 @@ services:
       - |
         resolver=$$(awk '/^nameserver/{print $$2; exit}' /etc/resolv.conf)
         sed "s/@DNS_RESOLVER@/$$resolver/g" /etc/demscore-router/nginx.conf > /tmp/nginx.conf
+        for cidr in $$(echo "${DEMSCORE_TRUSTED_PROXY_CIDRS:-127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}" | tr ',' ' '); do
+          printf 'set_real_ip_from %s;\n' "$$cidr"
+        done > /tmp/real_ip.conf
         exec nginx -c /tmp/nginx.conf -g "daemon off;"
     volumes:
       - ./router/nginx.conf:/etc/demscore-router/nginx.conf:ro
     restart: unless-stopped
 
   db:
-    image: postgis/postgis:16-3.4
+    # Stay on the 16 major: a new major cannot open the pg_data volume. The
+    # PostGIS minor and the base OS can move; scripts/upgrade_db_volume.sh
+    # brings the volume's extensions and collation version up to the image on
+    # every start.
+    image: postgis/postgis:16-3.6
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-postgis
+    # No published port. Every script reaches the database with `podman compose
+    # exec db psql` and every service over the compose network, and the role
+    # POSTGRES_USER creates is a superuser.
     environment:
       POSTGRES_DB: demscore
       POSTGRES_USER: demscore
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-demscore}
-    ports:
-      - "${DEMSCORE_DB_PORT:-5532}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./initdb:/docker-entrypoint-initdb.d:ro
@@ -40,25 +49,33 @@ services:
     restart: unless-stopped
 
   mapserver:
-    image: camptocamp/mapserver:8.4
+    image: camptocamp/mapserver:8.6
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapserver
     depends_on:
       db:
         condition: service_healthy
+    # Reads as demscore_reader, the read-only role scripts/sync_db_roles.sh
+    # keeps, never as the superuser that owns the data.
     environment:
       MS_MAPFILE: /etc/mapserver/mapserver.map
       MS_DEBUGLEVEL: "0"
       MS_ERRORFILE: stderr
       MIN_PROCESSES: 8
       MAX_PROCESSES: 16
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-demscore}
-      PGPASSWORD: ${POSTGRES_PASSWORD:-demscore}
+      PGPASSWORD: ${DEMSCORE_READER_PASSWORD:-}
     volumes:
       - ./mapserver:/etc/mapserver:ro
+      - ./mapserver/apache/demscore-hardening.conf:/etc/apache2/conf-enabled/zz-demscore-hardening.conf:ro
     restart: unless-stopped
 
+  # Built from web-backend/Containerfile, dependencies installed from the
+  # lockfile at build time and run as an unprivileged user. scripts/start_services.sh
+  # rebuilds it on every start, so a change to server.js is picked up then.
   web-backend:
-    image: node:20-alpine
+    build:
+      context: ./web-backend
+      dockerfile: Containerfile
+    image: localhost/demscore-web-backend:latest
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-web-backend
     depends_on:
       db:
@@ -68,21 +85,18 @@ services:
       PGHOST: db
       PGPORT: "5432"
       PGDATABASE: demscore
-      PGUSER: demscore
-      PGPASSWORD: ${POSTGRES_PASSWORD:-demscore}
+      PGUSER: demscore_reader
+      PGPASSWORD: ${DEMSCORE_READER_PASSWORD:-}
       CONFIG_DIR: /app/webapp-config
       REFERENCE_DATA_DIR: /app/reference-data
-      DEMSCORE_ENABLE_MAPCACHE: ${DEMSCORE_ENABLE_MAPCACHE:-0}
-    working_dir: /app
-    command: sh -lc "npm install --no-audit --no-fund && npm run start"
+      DEMSCORE_ENABLE_MAPCACHE: ${DEMSCORE_ENABLE_MAPCACHE:-1}
     volumes:
-      - ./web-backend:/app
       - ./webapp/config:/app/webapp-config:ro
       - ./data/reference:/app/reference-data:ro
     restart: unless-stopped
 
   web:
-    image: nginx:1.27-alpine
+    image: nginx:1.30-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-web
     depends_on:
       - mapserver
@@ -95,19 +109,20 @@ services:
     restart: unless-stopped
 
   mapcache:
-    image: nginx:1.27-alpine
+    image: nginx:1.30-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache
     depends_on:
       - mapserver
     environment:
-      DEMSCORE_ENABLE_MAPCACHE: ${DEMSCORE_ENABLE_MAPCACHE:-0}
+      DEMSCORE_ENABLE_MAPCACHE: ${DEMSCORE_ENABLE_MAPCACHE:-1}
       DEMSCORE_MAPCACHE_MAX_SIZE: ${DEMSCORE_MAPCACHE_MAX_SIZE:-100g}
+      DEMSCORE_MAPCACHE_MIN_FREE: ${DEMSCORE_MAPCACHE_MIN_FREE:-10g}
       DEMSCORE_MAPCACHE_TTL_SECONDS: ${DEMSCORE_MAPCACHE_TTL_SECONDS:-43200}
     command:
       - sh
       - -lc
       - |
-        case "${DEMSCORE_ENABLE_MAPCACHE:-0}" in
+        case "${DEMSCORE_ENABLE_MAPCACHE:-1}" in
           1|true|TRUE|yes|YES|on|ON)
             config=/etc/demscore-mapcache/cache-enabled.conf
             ;;
@@ -118,6 +133,7 @@ services:
         resolver=$$(awk '/^nameserver/{print $$2; exit}' /etc/resolv.conf)
         sed -e "s/@DNS_RESOLVER@/$$resolver/g" \
             -e "s/@MAPCACHE_MAX_SIZE@/${DEMSCORE_MAPCACHE_MAX_SIZE:-100g}/g" \
+            -e "s/@MAPCACHE_MIN_FREE@/${DEMSCORE_MAPCACHE_MIN_FREE:-10g}/g" \
             -e "s/@MAPCACHE_TTL_SECONDS@/${DEMSCORE_MAPCACHE_TTL_SECONDS:-43200}/g" \
             "$$config" > /tmp/nginx.conf
         exec nginx -c /tmp/nginx.conf -g "daemon off;"
@@ -127,7 +143,7 @@ services:
     restart: unless-stopped
 
   gdal:
-    image: ghcr.io/osgeo/gdal:ubuntu-small-latest
+    image: ghcr.io/osgeo/gdal:ubuntu-small-3.13.3
     profiles: ["setup"]
     depends_on:
       db:
@@ -143,7 +159,7 @@ services:
     build:
       context: ./tools
       dockerfile: Containerfile
-    image: localhost/demscore-tools:1
+    image: localhost/demscore-tools:2
     profiles: ["setup"]
     network_mode: none
     working_dir: /work

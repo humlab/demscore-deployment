@@ -4,7 +4,7 @@ set -euo pipefail
 # Builds webapp/dist, which the `web` nginx container serves.
 #
 # The build runs in a throwaway Node container rather than on the host, so a
-# server needs nothing beyond podman: the same node:20-alpine image the
+# server needs nothing beyond podman: the same node:24-alpine image the
 # web-backend service already runs in. The webapp directory is mounted in, so
 # node_modules and dist land on the host where nginx's bind mount reads them.
 # Nothing in the dependency tree compiles native code (fsevents, the only
@@ -13,7 +13,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEBAPP_DIR="${ROOT_DIR}/webapp"
-NODE_IMAGE="${DEMSCORE_NODE_IMAGE:-docker.io/library/node:20-alpine}"
+NODE_IMAGE="${DEMSCORE_NODE_IMAGE:-docker.io/library/node:24-alpine}"
 
 if ! command -v podman >/dev/null 2>&1; then
   echo "ERROR: podman is required to build the web app." >&2

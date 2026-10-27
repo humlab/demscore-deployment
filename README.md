@@ -6,7 +6,7 @@ interactive hexagon map of the world.
 ## Requirements
 
 - `bash`, `curl` and `podman` with compose support
-- About 10 GB of disk, plus room for the tile cache if you enable it
+- About 10 GB of disk, plus room for the tile cache (up to 100 GB by default)
 
 ## Install
 
@@ -15,6 +15,15 @@ interactive hexagon map of the world.
 ```
 
 The map is then at <http://127.0.0.1:8090>.
+
+## Serving it publicly
+
+The stack serves plain HTTP on `DEMSCORE_ROUTER_PORT` and expects a reverse
+proxy in front of it to terminate TLS and forward every path to that port.
+[deploy/nginx-vhost.conf.example](deploy/nginx-vhost.conf.example) is one for
+nginx. Firewall the port so only the reverse proxy can reach it: requests are
+rate-limited per client using the address the proxy passes in
+`X-Forwarded-For`, and a request made to the port directly goes round TLS.
 
 ## Commands
 
@@ -49,7 +58,8 @@ changing it.
 | Setting | Default | |
 | --- | --- | --- |
 | `DEMSCORE_ROUTER_PORT` | `8090` | Port the site is served on |
-| `DEMSCORE_ENABLE_MAPCACHE` | `0` | `1` caches map tiles |
+| `DEMSCORE_TRUSTED_PROXY_CIDRS` | private ranges | Where the reverse proxy connects from (comma-separated); set it if the proxy is on another host with a public address |
+| `DEMSCORE_ENABLE_MAPCACHE` | `1` | `0` turns off map tile caching |
 | `DEMSCORE_MAPCACHE_MAX_SIZE` | `100g` | Largest the tile cache may grow; make sure the disk has room |
 
 ## Licence

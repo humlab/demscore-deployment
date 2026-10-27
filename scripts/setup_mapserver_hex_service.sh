@@ -38,8 +38,6 @@ HISTORICAL_BASEMAPS_URL_BASE="https://raw.githubusercontent.com/aourednik/histor
 # Project-local approximate geometries. These are deliberately separate from
 # upstream reference files, which are vendored verbatim.
 CUSTOM_HISTORICAL_FILE="${ROOT_DIR}/data/reference/custom/v_dem_south_yemen_aden_approx.geojson"
-PG_HOST="${PG_HOST:-127.0.0.1}"
-PG_PORT="${PG_PORT:-${DEMSCORE_DB_PORT:-5532}}"
 PG_DB="${PG_DB:-demscore}"
 PG_USER="${PG_USER:-demscore}"
 
@@ -205,7 +203,7 @@ podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -f -
 # the colour notes in AGENTS.md); it is just that here the hexagons move rather
 # than their fill. Browsers hold their own copy behind the service worker, so a
 # reader who was on the page needs a hard reload as well.
-if [[ "${DEMSCORE_ENABLE_MAPCACHE:-0}" == "1" ]] && podman container exists "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null; then
+if [[ "${DEMSCORE_ENABLE_MAPCACHE:-1}" == "1" ]] && podman container exists "${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache" 2>/dev/null; then
   echo "Clearing the WMS tile cache, which still holds the previous geometry..."
   # Not fatal: the database work above is done either way, and the checks below
   # are what say whether it is right. Stopping here once skipped all of them.
@@ -288,7 +286,7 @@ curl -sS "http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver
 # than CRS, and the full Equal Earth world box -- so a mapfile that only renders
 # under some other projection or axis order fails here rather than in a browser.
 while IFS='|' read -r dataset variable year; do
-  example_getmap="http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=100000"
+  example_getmap="http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1024&HEIGHT=498&FORMAT=image/png&dataset=${dataset}&variable=${variable}&year=${year}&hex_size=100000"
   echo "Validating WMS GetMap (EPSG:8857) for ${dataset}.${variable} ${year}..."
   map_response="$(curl -sS -o /tmp/demscore_hex_test.png -w '%{http_code} %{content_type} %{size_download}' "$example_getmap")"
   echo "$map_response"

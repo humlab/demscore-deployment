@@ -19,18 +19,26 @@ JavaScript and OpenLayers, built with webpack. The whole stack runs under
 
 | Component | Technology | Role |
 | --- | --- | --- |
-| `router` | nginx 1.27 | The only published port (`DEMSCORE_ROUTER_PORT`, default 8090). Sends `/api` and `/healthz` to `web-backend`, `/mapserver` to `mapcache`, and everything else to `web` |
-| `web` | nginx 1.27 | Serves the built web app (`webapp/dist`) and each module's `codebook.pdf` at `/codebooks/<module>/codebook.pdf` |
-| `web-backend` | Node 20, Express, `pg` | JSON API for everything except the map tiles (`web-backend/server.js`) |
-| `mapcache` | nginx 1.27 | Proxy in front of MapServer. Caches tiles when `DEMSCORE_ENABLE_MAPCACHE=1` and passes them through otherwise (`mapcache/cache-*.conf`) |
-| `mapserver` | MapServer 8.4 | WMS server. Its layers call SQL in PostGIS for every tile (`mapserver/mapserver.map`) |
-| `db` | PostgreSQL 16, PostGIS 3.4 | All data: indicator values, codebook metadata, boundaries, hex meshes, and the functions that score and classify them |
+| `router` | nginx 1.30 | The only published port (`DEMSCORE_ROUTER_PORT`, default 8090). Sends `/api` and `/healthz` to `web-backend`, `/mapserver` to `mapcache`, and everything else to `web` |
+| `web` | nginx 1.30 | Serves the built web app (`webapp/dist`) and each module's `codebook.pdf` at `/codebooks/<module>/codebook.pdf` |
+| `web-backend` | Node 24, Express, `pg` | JSON API for everything except the map tiles (`web-backend/server.js`) |
+| `mapcache` | nginx 1.30 | Proxy in front of MapServer. Caches tiles when `DEMSCORE_ENABLE_MAPCACHE=1` and passes them through otherwise (`mapcache/cache-*.conf`) |
+| `mapserver` | MapServer 8.6 | WMS server. Its layers call SQL in PostGIS for every tile (`mapserver/mapserver.map`) |
+| `db` | PostgreSQL 16, PostGIS 3.6 | All data: indicator values, codebook metadata, boundaries, hex meshes, and the functions that score and classify them |
 | `gdal` | GDAL `ogr2ogr` | Imports the GeoJSON boundary files into PostGIS during setup. Never left running |
-| `tools` | Node 20, Python 3, poppler | Runs helper scripts during setup: parsing codebooks, import checks and reports, building config files. Has no network and is never left running |
+| `tools` | Node 24, Python 3, poppler | Runs helper scripts during setup: parsing codebooks, import checks and reports, building config files. Has no network and is never left running |
 
 `gdal` and `tools` are in the `setup` profile, so `podman compose up` does not
 start them. The deploy scripts run them on demand, which means the host needs
 only `bash`, `curl` and `podman`.
+
+The router speaks plain HTTP and expects a reverse proxy in front of it to
+terminate TLS. It is also where requests are limited: per-client rate limits on
+`/api` and `/mapserver`, the security headers (CSP among them), and only
+`/mapserver` itself, with only the WMS parameters the app uses, reaches
+MapServer. `mapserver` and `web-backend` query the database as
+`demscore_reader`, which can only read and has a 30-second statement timeout;
+the superuser `demscore` is for the deployment scripts.
 
 ```mermaid
 flowchart LR
@@ -116,7 +124,9 @@ The colours are written once, in `webapp/src/core/palettes.js`.
 
 Tiles are cached in two places:
 
-1. **On the server**, by the `mapcache` nginx proxy cache, keyed by URL.
+1. **On the server**, by the `mapcache` nginx proxy cache, keyed by the query
+   the router forwards. The router rebuilds that query from a fixed list of
+   WMS parameters, so a tile is only ever stored under the request that drew it.
    `./deploy.sh preload` fills it and `./deploy.sh clear-map-tile-cache`
    empties it.
 2. **In the browser**, by the service worker (`webapp/sw.js`). Its cache name
@@ -149,7 +159,7 @@ cache and renames the browser cache.
 `webapp/` is a git submodule (`humlab/demscore-web`). It has no framework: plain
 JavaScript classes, OpenLayers 10 for the map, proj4 for Equal Earth, Lucide for
 icons, and Mediabunny for video export. Webpack builds it into `webapp/dist`, and
-`./deploy.sh start` runs that build in a throwaway `node:20-alpine` container.
+`./deploy.sh start` runs that build in a throwaway `node:24-alpine` container.
 
 - `src/DemscoreApp.js` wires the app together.
 - `src/controllers/` has one controller per part of the UI: the map, the data

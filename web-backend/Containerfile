@@ -1,0 +1,12 @@
+# The web backend, with its dependencies installed from the committed lockfile
+# at build time rather than by `npm install` on every container start. Runs as
+# the image's unprivileged `node` user. Built by scripts/start_services.sh.
+FROM docker.io/library/node:24-alpine
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+COPY server.js ./
+
+USER node
+CMD ["node", "server.js"]

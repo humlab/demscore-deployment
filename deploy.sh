@@ -49,8 +49,33 @@ set_env_var() {
   if grep -q "^${key}=" "$ENV_FILE"; then
     sed -i "s|^${key}=.*|${key}=${value}|" "$ENV_FILE"
   else
+    # A file that does not end in a newline would take the new key onto the
+    # end of its last line.
+    if [[ -s "$ENV_FILE" && -n "$(tail -c1 "$ENV_FILE")" ]]; then
+      echo >> "$ENV_FILE"
+    fi
     echo "${key}=${value}" >> "$ENV_FILE"
   fi
+}
+
+# Creates .env from .env.example if there is none, and generates each database
+# password it lacks (or still has as the placeholder). Run by start as well as
+# install, so a .env written before DEMSCORE_READER_PASSWORD existed gets one;
+# scripts/sync_db_roles.sh then gives the roles whatever .env says.
+ensure_env() {
+  local key current
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "Creating .env from .env.example..."
+    cp "$ENV_EXAMPLE" "$ENV_FILE"
+  fi
+  chmod 600 "$ENV_FILE"
+  for key in POSTGRES_PASSWORD DEMSCORE_READER_PASSWORD; do
+    current="$(grep "^${key}=" "$ENV_FILE" | cut -d'=' -f2- || true)"
+    if [[ -z "$current" || "$current" == "change_me" ]]; then
+      set_env_var "$key" "$(generate_password)"
+      echo "Generated ${key} and saved to .env"
+    fi
+  done
 }
 
 # The host needs bash, curl and podman. Everything else -- Python, pdftotext,
@@ -75,21 +100,7 @@ check_deps() {
 cmd_install() {
   check_deps
 
-  # Create .env from example if it doesn't exist
-  if [[ ! -f "$ENV_FILE" ]]; then
-    echo "Creating .env from .env.example..."
-    cp "$ENV_EXAMPLE" "$ENV_FILE"
-  fi
-
-  # Generate POSTGRES_PASSWORD if it's still the placeholder or missing
-  current_pw="$(grep '^POSTGRES_PASSWORD=' "$ENV_FILE" | cut -d'=' -f2- || true)"
-  if [[ -z "$current_pw" || "$current_pw" == "change_me" ]]; then
-    new_pw="$(generate_password)"
-    set_env_var "POSTGRES_PASSWORD" "$new_pw"
-    echo "Generated POSTGRES_PASSWORD and saved to .env"
-  else
-    echo "POSTGRES_PASSWORD already set, skipping generation"
-  fi
+  ensure_env
 
   echo ""
   echo "Starting services..."
@@ -116,6 +127,7 @@ cmd_import_data() {
 
 cmd_start() {
   check_deps
+  ensure_env
   ./scripts/start_services.sh
 }
 

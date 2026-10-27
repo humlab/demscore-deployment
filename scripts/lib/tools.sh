@@ -47,7 +47,7 @@ tool_tmpdir() {
 # Builds the image if it is missing, so its build output lands here rather
 # than in the middle of whatever the first tool call prints.
 ensure_tools_image() {
-  (cd "$TOOLS_ROOT_DIR" && podman image exists localhost/demscore-tools:1) && return 0
+  (cd "$TOOLS_ROOT_DIR" && podman image exists localhost/demscore-tools:2) && return 0
   echo "Building the tools image (tools/Containerfile), once..."
   (cd "$TOOLS_ROOT_DIR" && podman compose --profile setup build tools)
 }

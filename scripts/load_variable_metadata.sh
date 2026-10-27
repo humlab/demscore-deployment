@@ -140,6 +140,9 @@ COPY demscore.codebook_source_datasets
 FROM '/tmp/codebook_source_datasets.csv'
 WITH (FORMAT csv, HEADER true);
 
+-- codebook_citations references the bibliography, so it has to go first: the
+-- other way round, every load after the first stopped here.
+DROP TABLE IF EXISTS demscore.codebook_citations;
 DROP TABLE IF EXISTS demscore.codebook_bibliography;
 CREATE TABLE demscore.codebook_bibliography (
   dataset TEXT NOT NULL,
@@ -156,7 +159,6 @@ WITH (FORMAT csv, HEADER true);
 
 -- role: 'dataset' for a codebook entry's "Dataset citation", 'variable' for its
 -- "Variable citation" -- the original source a single indicator was taken from.
-DROP TABLE IF EXISTS demscore.codebook_citations;
 CREATE TABLE demscore.codebook_citations (
   dataset TEXT NOT NULL,
   long_tag TEXT NOT NULL,

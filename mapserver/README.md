@@ -89,8 +89,10 @@ The app always uses the same `/mapserver` route. With `DEMSCORE_ENABLE_MAPCACHE=
 
 For direct container-to-container debugging, MapServer itself is still addressed internally as `http://mapserver/?map=/etc/mapserver/mapserver.map`.
 
+What reaches MapServer from outside is narrower than what MapServer accepts. The router forwards exactly `/mapserver`, and rebuilds the query from a fixed list -- the standard WMS parameters the app sends plus the six above -- in a fixed order, with `map` fixed to this mapfile (`router/nginx.conf`). The tile cache keys on that rebuilt query, so a parameter not on the list cannot change a cached tile. A new request parameter has to be added there as well as to `VALIDATION`. The mapfile itself only enables `GetMap` and `GetCapabilities`, refuses SLD, and caps an image at 1024 pixels a side (`MAXSIZE`).
+
 ## Example GetMap URL
 
 The whole world, requested the way the web app requests it (WMS 1.1.1 and `SRS`, which sidesteps 1.3.0's axis-order rules):
 
-`http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1200&HEIGHT=584&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000&polarity=positive`
+`http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&VERSION=1.1.1&REQUEST=GetMap&LAYERS=hex_variable,hex_outline&STYLES=&SRS=EPSG:8857&BBOX=-17243960,-8392928,17243960,8392928&WIDTH=1024&HEIGHT=498&FORMAT=image/png&dataset=v_dem&variable=v2x_polyarchy&year=2020&hex_size=100000&polarity=positive`

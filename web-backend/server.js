@@ -9,7 +9,7 @@ const CONFIG_DIR = process.env.CONFIG_DIR || path.join(__dirname, "webapp-config
 const REFERENCE_DATA_DIR = process.env.REFERENCE_DATA_DIR || path.join(__dirname, "..", "data", "reference");
 const LAND_BASEMAP_FILE = "ne_50m_admin_0_countries.geojson";
 const WMS_BASE_PATH = "/mapserver?map=/etc/mapserver/mapserver.map";
-const CACHE_ENABLED = isTruthy(process.env.DEMSCORE_ENABLE_MAPCACHE || "0");
+const CACHE_ENABLED = isTruthy(process.env.DEMSCORE_ENABLE_MAPCACHE || "1");
 
 // `download` points at Demscore's own downloader, not at a file of ours. The
 // portal has no per-variable page to deep-link to — `menu_all_variables` is a
@@ -62,14 +62,14 @@ const pool = new Pool({
   host: process.env.PGHOST || "db",
   port: Number.parseInt(process.env.PGPORT || "5432", 10),
   database: process.env.PGDATABASE || "demscore",
-  user: process.env.PGUSER || "demscore",
-  password: process.env.PGPASSWORD || "demscore",
+  user: process.env.PGUSER || "demscore_reader",
+  password: process.env.PGPASSWORD,
   max: Number.parseInt(process.env.PG_MAX_CLIENTS || "10", 10),
 });
 
 const app = express();
+app.disable("x-powered-by");
 app.use(cors());
-app.use(express.json());
 
 function isTruthy(value) {
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
@@ -847,12 +847,11 @@ app.get("/api/map-data", asyncRoute(async (req, res) => {
     });
 }));
 
+// The cause goes to the log only. Its message is a database error's text --
+// table names, a cancelled statement -- which tells a reader nothing they can act on.
 app.use((err, _req, res, _next) => {
   console.error(err);
-  res.status(500).json({
-    error: "internal_error",
-    message: err.message,
-  });
+  res.status(500).json({ error: "internal_error" });
 });
 
 const server = app.listen(PORT, () => {

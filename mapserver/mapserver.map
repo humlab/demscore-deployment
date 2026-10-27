@@ -9,7 +9,9 @@ MAP
   # this extent from the corners would cut 41% off the width of the world.
   EXTENT -17243960 -8392928 17243960 8392928
   UNITS METERS
-  MAXSIZE 10000
+  # Twice the 512px tile every client asks for. Each pixel is paid for in
+  # memory by one of the FastCGI processes, so this bounds what one request costs.
+  MAXSIZE 1024
 
   PROJECTION
     "init=epsg:8857"
@@ -17,7 +19,13 @@ MAP
 
   WEB
     METADATA
-      "ows_enable_request" "*"
+      # The two requests anything here makes: the web client and the preloader
+      # send GetMap, setup's smoke test GetCapabilities. Everything else --
+      # GetFeatureInfo, WFS, WCS -- stays off.
+      "wms_enable_request" "GetMap GetCapabilities"
+      # SLD would let a request restyle the tiles (or make MapServer fetch a
+      # style from any URL), and the tile cache does not key on it.
+      "wms_sld_enabled" "false"
       "wms_title" "Demscore Hexagons"
       "wms_abstract" "Hexagon thematic map from Demscore variables in PostGIS"
       "wms_onlineresource" "http://127.0.0.1:8090/mapserver?map=/etc/mapserver/mapserver.map"
@@ -26,7 +34,6 @@ MAP
       # made of hexagons, which is the whole reason there are two meshes.
       "wms_srs" "EPSG:4326 EPSG:8857 EPSG:3857"
       "wms_allow_getmap_without_styles" "true"
-      "wms_feature_info_mime_type" "text/plain"
       "wms_keywordlist" "demscore,hexagons,postgis"
     END
   END
@@ -40,7 +47,7 @@ MAP
     PROJECTION
       "init=epsg:8857"
     END
-    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore_reader"
     # Two kinds of hexagon. The first branch is the data: every cell of a country
     # with a value, classed onto the scheme's band. The second is no data: every
     # cell of a present-day country with no value this year, in class 99 (the
@@ -65,8 +72,6 @@ MAP
     METADATA
       "wms_title" "Dataset Variable Hexagons"
       "wms_srs" "EPSG:4326 EPSG:8857"
-      "wms_include_items" "all"
-      "gml_include_items" "all"
     END
 
     VALIDATION
@@ -130,15 +135,13 @@ MAP
     PROJECTION
       "init=epsg:8857"
     END
-    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore_reader"
     DATA "geom FROM (WITH scored AS MATERIALIZED (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), scores AS MATERIALIZED (SELECT country_id, class_idx FROM scored UNION ALL SELECT c.id, 99 FROM demscore.countries c WHERE c.source = 'natural_earth' AND c.iso_a3 IS DISTINCT FROM 'ATA' AND NOT EXISTS (SELECT 1 FROM scored s WHERE s.country_id = c.id) AND NOT EXISTS (SELECT 1 FROM demscore.hex_mesh_overlaps o JOIN scored s ON s.country_id = o.other_country_id WHERE o.country_id = c.id AND o.hex_size_m = %hex_size%)), box_edges AS MATERIALIZED (SELECT be.id, be.geom FROM demscore.hex_border_edges be WHERE be.hex_size_m = %hex_size% AND ST_Intersects(be.geom, ST_Expand(!BOX!, %hex_size%))), drawn AS (SELECT e.geom FROM box_edges e JOIN demscore.hex_border_sides sd ON sd.edge_id = e.id JOIN scores sc ON sc.country_id = sd.country_id GROUP BY e.id, e.geom HAVING count(DISTINCT sd.on_left) = 1 OR min(sc.class_idx) <> max(sc.class_idx)) SELECT 1 AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 8857) AS geom FROM drawn HAVING count(*) > 0) AS ho USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
       "wms_title" "Equal-Value Area Outlines"
       "wms_srs" "EPSG:4326 EPSG:8857"
-      "wms_include_items" "all"
-      "gml_include_items" "all"
     END
 
     VALIDATION
@@ -186,15 +189,13 @@ MAP
     PROJECTION
       "init=epsg:3857"
     END
-    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore_reader"
     DATA "geom FROM (SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' IN ('positive', 'neutral') THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' IN ('positive', 'neutral') THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh_mercator hm JOIN demscore.country_scores('%dataset%','%variable%',%year%) cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!)) AS hv USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
       "wms_title" "Dataset Variable Hexagons (Web Mercator)"
       "wms_srs" "EPSG:4326 EPSG:3857"
-      "wms_include_items" "all"
-      "gml_include_items" "all"
     END
 
     VALIDATION
@@ -224,15 +225,13 @@ MAP
     PROJECTION
       "init=epsg:3857"
     END
-    CONNECTION "host=db port=5432 dbname=demscore user=demscore"
+    CONNECTION "host=db port=5432 dbname=demscore user=demscore_reader"
     DATA "geom FROM (WITH scores AS MATERIALIZED (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), box_edges AS MATERIALIZED (SELECT be.id, be.geom FROM demscore.hex_border_edges_mercator be WHERE be.hex_size_m = %hex_size% AND ST_Intersects(be.geom, ST_Expand(!BOX!, %hex_size%))), drawn AS (SELECT e.geom FROM box_edges e JOIN demscore.hex_border_sides_mercator sd ON sd.edge_id = e.id JOIN scores sc ON sc.country_id = sd.country_id GROUP BY e.id, e.geom HAVING count(DISTINCT sd.on_left) = 1 OR min(sc.class_idx) <> max(sc.class_idx)) SELECT 1 AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 3857) AS geom FROM drawn HAVING count(*) > 0) AS ho USING UNIQUE id USING SRID=3857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
       "wms_title" "Equal-Value Area Outlines (Web Mercator)"
       "wms_srs" "EPSG:4326 EPSG:3857"
-      "wms_include_items" "all"
-      "gml_include_items" "all"
     END
 
     VALIDATION

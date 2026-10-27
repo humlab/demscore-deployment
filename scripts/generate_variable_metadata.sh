@@ -5,17 +5,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-PG_HOST="${PG_HOST:-127.0.0.1}"
-PG_PORT="${PG_PORT:-${DEMSCORE_DB_PORT:-5532}}"
 PG_DB="${PG_DB:-demscore}"
 PG_USER="${PG_USER:-demscore}"
-export PGPASSWORD="${PG_PASSWORD:-demscore}"
 
 OUT_FILE="${ROOT_DIR}/webapp/config/variable_metadata.json"
 
 echo "Generating ${OUT_FILE} from database..."
 
-psql -h "$PG_HOST" -p "$PG_PORT" -U "$PG_USER" -d "$PG_DB" -At <<'SQL' > "$OUT_FILE"
+cd "$ROOT_DIR"
+podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -At <<'SQL' > "$OUT_FILE"
 SELECT jsonb_pretty(
   jsonb_object_agg(
     dataset_key,

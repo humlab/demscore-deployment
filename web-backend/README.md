@@ -26,3 +26,11 @@
 - `legend-semantics` and `variable-polarity` are read from mounted JSON config files under `webapp/config`.
 
 If DB tables are missing (for example before loaders run), `variables` and `variable-metadata` fall back to the corresponding JSON files if present.
+
+## Running
+
+`./deploy.sh start` builds the image from `Containerfile` (dependencies installed with
+`npm ci --omit=dev` from `package-lock.json`, run as the unprivileged `node` user) and starts it.
+It connects as `demscore_reader`, a role that can only read and whose statements time out
+after 30 s; an error reaches the client as `{"error": "internal_error"}` and its detail goes to
+the container log only.

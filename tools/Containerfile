@@ -7,7 +7,7 @@
 # built the web app has most of this layer already. Built on first use by
 # `podman compose --profile setup run tools` (scripts/lib/tools.sh); bump the
 # tag in compose.yml when this file changes, or `podman compose build tools`.
-FROM docker.io/library/node:20-alpine
+FROM docker.io/library/node:24-alpine
 
 RUN apk add --no-cache python3 poppler-utils
 

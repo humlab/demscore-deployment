@@ -357,6 +357,69 @@ draw_stage_progress() {
   progress_draw "$label" "$permille" "$text"
 }
 
+# Everything the summary needs from the database, as one JSON object, so the
+# report script never connects to it. Each part is null when its table does
+# not exist (a first install, or a step that never got that far).
+collect_db_facts() {
+  psql_db -q -At <<'SQL'
+-- Never wait on somebody else's lock for long: these facts are worth having,
+-- but not worth an import that sits silent behind a session holding the tables.
+SET lock_timeout = '30s';
+
+CREATE FUNCTION pg_temp.rows(query TEXT) RETURNS JSON LANGUAGE plpgsql AS $fn$
+DECLARE
+  result JSON;
+BEGIN
+  EXECUTE format('SELECT COALESCE(json_agg(q), ''[]''::json) FROM (%s) q', query) INTO result;
+  RETURN result;
+EXCEPTION WHEN undefined_table OR undefined_column THEN
+  RETURN NULL;
+END
+$fn$;
+
+SELECT json_build_object(
+  'variables', pg_temp.rows($q$
+    SELECT dataset, variable, hidden FROM demscore.variables ORDER BY 1, 2 $q$),
+  'columns', pg_temp.rows($q$
+    SELECT dataset, column_name, outcome, value_count, na_token_cells, detail
+    FROM demscore.import_column_report ORDER BY dataset, column_position $q$),
+  'counts', pg_temp.rows($q$
+    SELECT v.dataset,
+           count(dv.id) AS values,
+           count(DISTINCT dv.country_id) AS countries,
+           count(dv.id) FILTER (WHERE dv.country_id IS NULL) AS unmapped,
+           min(dv.year) AS year_min,
+           max(dv.year) AS year_max
+    FROM demscore.variables v
+    LEFT JOIN demscore.dataset_values dv ON dv.variable_id = v.id
+    GROUP BY v.dataset $q$),
+  'metadata_parsed', pg_temp.rows($q$
+    SELECT dataset, count(*) AS entries FROM demscore.variable_metadata_raw GROUP BY 1 $q$),
+  'metadata_matched', pg_temp.rows($q$
+    SELECT v.dataset,
+           count(*) AS visible,
+           count(vm.variable_id) AS matched,
+           COALESCE(json_agg(v.variable ORDER BY v.variable)
+                    FILTER (WHERE vm.variable_id IS NULL), '[]') AS unmatched
+    FROM demscore.variables v
+    LEFT JOIN demscore.variable_metadata vm ON vm.variable_id = v.id
+    WHERE NOT v.hidden
+    GROUP BY v.dataset $q$),
+  'audit', pg_temp.rows($q$
+    SELECT dataset, resolution_status AS status,
+           count(DISTINCT COALESCE(iso3, '') || '|' || COALESCE(country_name, '')) AS entities,
+           sum(value_count) AS values
+    FROM demscore.dataset_value_unmapped_audit GROUP BY 1, 2 $q$),
+  'unresolved', pg_temp.rows($q$
+    SELECT dataset, COALESCE(iso3, '-') AS iso3, country_name,
+           min(year) AS from_year, max(year) AS to_year, sum(value_count) AS values
+    FROM demscore.dataset_value_unmapped_audit
+    WHERE resolution_status = 'unresolved'
+    GROUP BY 1, 2, 3 ORDER BY sum(value_count) DESC $q$)
+);
+SQL
+}
+
 print_summary() {
   if ! collect_db_facts > "${RUN_DIR}/facts.json" 2> "${RUN_DIR}/facts.log"; then
     echo '{}' > "${RUN_DIR}/facts.json"
@@ -480,7 +543,7 @@ offer_preload() {
   if (( NO_PRELOAD )); then
     return 0
   fi
-  if ! is_truthy "${DEMSCORE_ENABLE_MAPCACHE:-0}"; then
+  if ! is_truthy "${DEMSCORE_ENABLE_MAPCACHE:-1}"; then
     echo "The server tile cache is off (DEMSCORE_ENABLE_MAPCACHE=0 in .env), so there is nothing to preload."
     return 0
   fi
