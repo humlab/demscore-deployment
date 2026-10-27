@@ -30,7 +30,7 @@ JavaScript and OpenLayers, built with webpack. The whole stack runs under
 
 `gdal` and `tools` are in the `setup` profile, so `podman compose up` does not
 start them. The deploy scripts run them on demand, which means the host needs
-only `bash`, `curl` and `podman`.
+only `bash`, `curl`, `git` and `podman` with a compose provider.
 
 The router speaks plain HTTP and expects a reverse proxy in front of it to
 terminate TLS. It is also where requests are limited: per-client rate limits on

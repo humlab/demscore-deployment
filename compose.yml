@@ -1,6 +1,6 @@
 services:
   router:
-    image: nginx:1.30-alpine
+    image: docker.io/library/nginx:1.30-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-router
     depends_on:
       - web
@@ -28,7 +28,7 @@ services:
     # PostGIS minor and the base OS can move; scripts/upgrade_db_volume.sh
     # brings the volume's extensions and collation version up to the image on
     # every start.
-    image: postgis/postgis:16-3.6
+    image: docker.io/postgis/postgis:16-3.6
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-postgis
     # No published port. Every script reaches the database with `podman compose
     # exec db psql` and every service over the compose network, and the role
@@ -49,7 +49,7 @@ services:
     restart: unless-stopped
 
   mapserver:
-    image: camptocamp/mapserver:8.6
+    image: docker.io/camptocamp/mapserver:8.6
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapserver
     depends_on:
       db:
@@ -96,7 +96,7 @@ services:
     restart: unless-stopped
 
   web:
-    image: nginx:1.30-alpine
+    image: docker.io/library/nginx:1.30-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-web
     depends_on:
       - mapserver
@@ -109,7 +109,7 @@ services:
     restart: unless-stopped
 
   mapcache:
-    image: nginx:1.30-alpine
+    image: docker.io/library/nginx:1.30-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache
     depends_on:
       - mapserver
