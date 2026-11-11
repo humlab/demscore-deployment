@@ -200,9 +200,12 @@ Tab from the address bar and do not touch the mouse.
 
 ### Keyboard, phone width (≤900px)
 
-- [ ] Enter on the variable button opens the picker; focus lands in its search field and the
-      dialog is announced by its heading.
-- [ ] Typing narrows the list; the topic chips narrow it further.
+- [ ] Enter on the variable button opens the picker; focus lands on the variable already on
+      the map, scrolled into view, and the dialog is announced by its heading. Not on the
+      search field: on a phone that raises the on-screen keyboard before anybody asked to type.
+- [ ] Typing in the search field narrows the list; the dataset and topic chips narrow it
+      further, each announced as pressed or not, and a chip with nothing under it, given the
+      other row, is faded and clears that row when pressed.
 - [ ] Options read as buttons in named groups, the one on the map reads as current, and each
       carries its coverage.
 - [ ] Choosing one closes the dialog and returns focus to the button, which now names it.
