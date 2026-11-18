@@ -62,8 +62,11 @@ are not limited.
 ## Importing data
 
 `./deploy.sh import-data` replaces the indicator data with the files in
-`data/Demscore_Module_Vars/` (`QoG`, `REPDEM` and `V-Dem`, each holding
-`data.csv` and `codebook.pdf`). It:
+`data/Demscore_Module_Vars/` (`QoG`, `REPDEM`, `UCDP` and `V-Dem`, each holding
+`data.csv` and `codebook.pdf`). Keep each module's folder as its Demscore
+download delivered it, including its `methodology.pdf`: modules exported under
+different Demscore versions come with different methodology documents, and the
+folder is what keeps each with its own. It:
 
 1. checks the files, and stops without changing anything if they cannot be
    loaded
@@ -103,7 +106,12 @@ imported only if every value in it is a number, so text columns (names, dates,
 party lists) are left out and listed in the summary.
 
 What must stay the same is the layout and each module's identifier columns:
-`u_..._country`, `u_..._year`, and the ISO code column for QoG and V-Dem.
+`u_..._country`, `u_..._year`, and the code column the module's countries are
+matched on: the ISO code for QoG and V-Dem, and the Gleditsch-Ward code
+(`u_ucdp_orgv_country_year_country_id`) for UCDP. REPDEM is matched by country
+name. The check stops the import if any row's code is missing or not of that
+form. The summary also lists any country whose name and code point at different
+countries.
 
 ### When an import fails
 

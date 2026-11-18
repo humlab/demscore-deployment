@@ -10,8 +10,10 @@
 #
 # It then runs regression assertions over the cases that are easy to get wrong:
 # coding units whose territory changes under them (Palestine, Zanzibar,
-# Vietnam), and the pre-1850 European states, where the right answer moves
-# between three different geometry sources as the years advance.
+# Vietnam, and UCDP's units that keep one code across a merger or a break-up),
+# the pre-1850 European states, where the right answer moves between three
+# different geometry sources as the years advance, and the countries that are
+# drawn only because Natural Earth's ISO code or a policy row was read right.
 #
 # Run it on its own any time; scripts/setup_mapserver_hex_service.sh runs it
 # after building the map tables.
@@ -103,24 +105,27 @@ if [[ "$unresolved_count" != "0" ]]; then
     dataset,
     coalesce(iso3, '-') AS iso3,
     country_name,
+    gwcode,
     min(year) AS from_year,
     max(year) AS to_year,
     sum(value_count) AS values,
     reason
   FROM demscore.dataset_value_unmapped_audit
   WHERE resolution_status = 'unresolved'
-  GROUP BY dataset, iso3, country_name, reason
+  GROUP BY dataset, iso3, country_name, gwcode, reason
   ORDER BY sum(value_count) DESC;" >&2
   cat >&2 <<MSG
 
 ${unresolved_count} source values have no resolution policy.
 
-Each entity above needs one of two things in sql/historical_geometry.sql:
+Each entity above needs one of these in sql/historical_geometry.sql:
 
   * geometry, as rows in demscore.historical_country_geometries_src plus a
     'historical_registry' row in demscore.country_resolution_policy; or
   * an 'intentionally_unsupported' policy row whose reason says why this
-    deployment cannot represent it.
+    deployment cannot represent it; or, for a Gleditsch-Ward code that stands
+    for a present-day country,
+  * a row in demscore.gwcode_natural_earth.
 
 Setup fails rather than shipping a map whose universe silently differs from
 the source's.
@@ -209,7 +214,35 @@ WITH expected(dataset, source_name, year, want_country, want_geometry_source) AS
   -- South Yemen before statehood is a low-confidence Aden marker; statehood
   -- years use the CShapes People's Democratic Republic polygon.
   ('v_dem', 'South Yemen',               1950, 'South Yemen (Aden approximation)', 'demscore_custom_aden_approx'),
-  ('v_dem', 'South Yemen',               1980, 'Yemen, People''s Republic of',  'cshapes_2.0')
+  ('v_dem', 'South Yemen',               1980, 'Yemen, People''s Republic of',  'cshapes_2.0'),
+  -- Matched on ISO3 against Natural Earth's ISO code, which is SSD where its
+  -- own country code is SDS; and two V-Dem codes Natural Earth has no ISO code
+  -- for, placed by policy rows.
+  ('qog',   'South Sudan',               2015, 'South Sudan',                   'natural_earth_50m'),
+  ('v_dem', 'South Sudan',               2015, 'South Sudan',                   'natural_earth_50m'),
+  ('v_dem', 'Kosovo',                    2010, 'Kosovo',                        'natural_earth_50m'),
+  ('v_dem', 'Somaliland',                2010, 'Somaliland',                    'natural_earth_50m'),
+  -- UCDP, matched on Gleditsch-Ward codes. A code whose name matches nothing
+  -- in Natural Earth, and the units that keep one code across a change of
+  -- territory: the outline in force before the change, the present-day one after.
+  ('ucdp',  'DR Congo (Zaire)',          2000, 'Democratic Republic of the Congo', 'natural_earth_50m'),
+  ('ucdp',  'Kosovo',                    2010, 'Kosovo',                        'natural_earth_50m'),
+  ('ucdp',  'Germany',                   1989, 'German Federal Republic',       'cshapes_2.0'),
+  ('ucdp',  'Germany',                   1991, 'Germany',                       'natural_earth_50m'),
+  ('ucdp',  'Yemen (North Yemen)',       1989, 'Yemen (Arab Republic of Yemen)', 'cshapes_2.0'),
+  ('ucdp',  'Yemen (North Yemen)',       1995, 'Yemen',                         'natural_earth_50m'),
+  ('ucdp',  'Russia (Soviet Union)',     1990, 'Russia (Soviet Union)',         'cshapes_2.0'),
+  ('ucdp',  'Russia (Soviet Union)',     1995, 'Russian Federation',            'natural_earth_50m'),
+  ('ucdp',  'Serbia (Yugoslavia)',       1995, 'Yugoslavia',                    'cshapes_2.0'),
+  ('ucdp',  'Serbia (Yugoslavia)',       2007, 'Serbia',                        'cshapes_2.0'),
+  ('ucdp',  'Serbia (Yugoslavia)',       2010, 'Serbia',                        'natural_earth_50m'),
+  ('ucdp',  'Ethiopia',                  1990, 'Ethiopia',                      'cshapes_2.0'),
+  ('ucdp',  'Ethiopia',                  2000, 'Ethiopia',                      'natural_earth_50m'),
+  ('ucdp',  'Sudan',                     2000, 'Sudan',                         'cshapes_2.0'),
+  ('ucdp',  'Sudan',                     2015, 'Sudan',                         'natural_earth_50m'),
+  ('ucdp',  'Indonesia',                 1995, 'Indonesia',                     'cshapes_2.0'),
+  ('ucdp',  'Israel',                    2010, 'Israel',                        'cshapes_2.0'),
+  ('ucdp',  'Israel',                    2024, 'Israel (with Gaza and the West Bank)', 'cshapes_2.0_derived')
 ), actual AS (
   SELECT
     e.dataset, e.source_name, e.year, e.want_country, e.want_geometry_source,

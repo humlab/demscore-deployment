@@ -11,7 +11,8 @@ Demscore is a mapping stack with an optional cache layer:
 3. Static web app (`web`) uses OpenLayers to request and display the WMS layer.
 4. Optional WMS cache proxy (`mapcache`) can sit in front of MapServer.
 
-The system turns tabular democracy indicator data into a thematic global hex map.
+The system turns tabular democracy and conflict indicator data (QoG, REPDEM, UCDP,
+V-Dem) into a thematic global hex map.
 
 ## 2) Architecture and Data Flow
 
@@ -22,10 +23,26 @@ The system turns tabular democracy indicator data into a thematic global hex map
    offers a tile preload. A map setup that fails on the new data restores the backup.
    `./deploy.sh install` runs the same import. Each run's logs, the facts it collected
    and its summary are kept in `state/imports/<run id>/`
-1. CSV datasets are mounted into the DB container from `data/Demscore_Module_Vars`.
+1. CSV datasets are mounted into the DB container from `data/Demscore_Module_Vars`, one
+   folder per module (`QoG`, `REPDEM`, `UCDP`, `V-Dem`). A folder is exactly what that
+   module's Demscore download ID produces: `data.csv`, `codebook.pdf` and the
+   `methodology.pdf` of the Demscore version the export was made under (v7 for the first
+   three, v8 for UCDP). Nothing reads the methodology; it is kept with its data so the two
+   cannot be paired wrongly
 2. `scripts/load_demscore_module_vars.sh` loads CSVs into a typed long-format model:
-   - `demscore.variables` (`dataset`, `variable`)
-   - `demscore.dataset_values` (`variable_id`, `year`, `iso3`, `country_name`, `value`, `country_id`)
+   - `demscore.datasets` (`dataset`, `country_key`, `country_key_column`): which one
+     identifier each dataset is matched to the map on -- `gwcode` (Gleditsch-Ward code:
+     UCDP), `iso3` (QoG, V-Dem) or `name` (REPDEM), preferred in that order when a dataset
+     carries more than one. Declared by hand in the loader's per-dataset settings, never
+     read from the export: the codebooks do not name an identifier column's code system,
+     describe some of them wrongly, and QoG's `ccodecow` and V-Dem's `cowcode` are
+     Correlates of War codes, which look like Gleditsch-Ward codes and differ exactly where
+     countries merged and split. `scripts/import_data_report.py preflight` fails an export
+     whose key column holds anything not of the declared form
+   - `demscore.variables` (`dataset`, `variable`, `hidden`, `zero_means_none`). The last is
+     set per dataset in the loader (UCDP: every variable is a count of deaths or conflicts)
+     and gives a value of 0 a class of its own; see "Zero is a class" in step 6
+   - `demscore.dataset_values` (`variable_id`, `year`, `iso3`, `country_name`, `gwcode`, `value`, `country_id`)
    - `demscore.import_source_report` (one row per dataset: rows, columns, years, countries)
      and `demscore.import_column_report` (one row per CSV column, with its `outcome`:
      `identifier`, `imported`, `dropped_not_numeric`, `dropped_no_values`,
@@ -138,10 +155,18 @@ The system turns tabular democracy indicator data into a thematic global hex map
      territories an ocean away; with it, France is metropolitan France plus Corsica.
      Sovereigns drawn as a single unit are always kept, so Western Sahara (`SAH`/`ESH`)
      and South Sudan (`SDS`/`SSD`) survive despite `adm0_a3` differing from their ISO code.
+  - gives `demscore.countries` two codes: `adm0_a3`, Natural Earth's own (which the policy
+    and the Gleditsch-Ward table name countries by), and `iso_a3`, the real ISO code or NULL
+    (`SSD` where `adm0_a3` is `SDS`; nothing for Kosovo or Somaliland). Datasets matched on
+    ISO3 are matched against the second, and `/api/map-data` shows it to readers. The column
+    called `iso_a3` used to hold `adm0_a3`, which showed readers `SDS` for South Sudan
   - remaps `demscore.dataset_values.country_id` to the country table, running
     `demscore.country_resolution_policy` first (`natural_earth`, then `cshapes`, then
-    `historical_registry`) and only then the source's own ISO3 and country name against
-    present-day countries. Policy goes first because it is a decision somebody wrote down
+    `historical_registry`) and only then one direct match: the dataset's own `country_key`
+    (through `demscore.gwcode_natural_earth` for a Gleditsch-Ward code). There is no
+    fallback from one identifier to another: a row the declared key does not place is
+    unresolved, and setup fails on it. Whether a policy row applies to an observation is
+    written once, in `demscore.policy_covers()`. Policy goes first because it is a decision somebody wrote down
     and an ISO3 that happens to equal a Natural Earth code is two code lists agreeing by
     accident; when they disagree the decision has to win, or a policy row narrowing an
     entity to part of its span would be quietly overtaken on the rest. An
@@ -151,6 +176,12 @@ The system turns tabular democracy indicator data into a thematic global hex map
     that table's `resolution_status` says whether the row is `intentionally_unsupported`
     (a policy names it and gives a reason) or `unresolved` (nothing does).
     `scripts/check_country_resolution.sh` fails setup on the second kind
+  - records in `demscore.country_match_disagreements` every source entity whose other
+    identifiers (its name, an ISO3 beside a code) would have placed it on a different
+    country from the one it is drawn on, with `decided_by_policy` saying whether a written
+    decision chose that (UCDP's 1989 "Germany" drawn as West Germany) or two of the
+    source's own identifiers simply disagree. The import summary counts the first kind and
+    lists the second
    - precomputes hex meshes into `demscore.hex_mesh` for supported hex sizes
    - precomputes the outline candidates as two tables: `demscore.hex_border_edges`, one row
      per hexagon edge that could ever separate two colours, and `demscore.hex_border_sides`,
@@ -186,6 +217,11 @@ The system turns tabular democracy indicator data into a thematic global hex map
    left to the data, and a no-data country any of whose cells is overlaid this year is left out
    of the outline's sides altogether, or the overlaid area would be stroked as a honeycomb; both
    read `demscore.hex_mesh_overlaps`. The area outline is 1.0px (it was 1.6).
+   **Zero is a class.** For a variable with `zero_means_none` (UCDP's counts), class 1 in
+   `demscore.country_scores()` is exactly 0 and the year's non-zero values are ranked into
+   classes 2-7, so the bluest colour means "none" and the legend's hover on it reads "0".
+   Ranked with the rest, 0 shared the lowest class with whatever small values fell beside it:
+   in 2024, 0 active conflicts with 1, which drew Ukraine and Sudan like a country at peace.
 7. `scripts/build_variable_coverage.sh` precomputes `webapp/config/variable_coverage.json`:
    - reads per-variable, per-year country counts once
    - buckets each variable across its own first-to-last year (~40 bars, one per year where
@@ -464,7 +500,7 @@ so an unknown dataset is a 400 rather than a silent fall back to `v_dem`:
 
 Accepted parameters for `hex_variable` and `hex_outline`:
 
-- `dataset`: `qog` | `repdem` | `v_dem`
+- `dataset`: `qog` | `repdem` | `ucdp` | `v_dem`
 - `variable`: alphanumeric/underscore (`^[A-Za-z0-9_]+$`)
 - `year`: four digits
 - `hex_size`: 5-7 digit integer
@@ -533,7 +569,9 @@ Setup, as part of `install`, also checks:
 - Loader is the canonical ingest path: it recreates `demscore.variables` and `demscore.dataset_values` from CSV headers.
 - `demscore.dataset_values` is the normalised value layer. If dataset column names change, update loader extraction logic first.
 - `demscore.country_resolution_policy` is the curated crosswalk, and it replaced
-  `demscore.country_aliases`. Use it for explicit source-name or source-code fixes such as
+  `demscore.country_aliases`. A row names its source entity by ISO3, name or
+  Gleditsch-Ward code (`source_gwcode`), and a Natural Earth target by `target_adm0_a3`.
+  Use it for explicit source-name or source-code fixes such as
   REPDEM `Czechia -> CZE`, for historical mappings into CShapes `gwcode`s, for entities the
   curated registry covers, and — the case an alias table could not express — for entities
   this deployment refuses to draw, which need a `reason` saying why. Do not map historical
@@ -674,7 +712,16 @@ Setup, as part of `install`, also checks:
     slice of it and narrowing it would rename every tile and void both caches. The
     crop is worth 29% of Web Mercator's square world and, in Equal Earth, only a pan
     limit at ordinary window shapes -- see the projection notes in `webapp/AGENTS.md`.
-- Preserve join quality in `hex_variable`: ISO3 matching is primary; name matching is fallback.
+- `demscore.gwcode_natural_earth` says which present-day country each Gleditsch-Ward code
+  stands for. It is a fact about two code lists, kept separate from the policy, which holds
+  the decisions: UCDP keeps one code across a merger or a break-up (365 is the Soviet Union
+  and then Russia, 345 Yugoslavia and then Serbia), and the years before the change are
+  policy rows pointing at CShapes, which runs first. A code in the data and in neither table
+  is unresolved. Natural Earth carries no Gleditsch-Ward codes, so the table is hand-kept;
+  the setup integrity check fails on an `adm0_a3` Natural Earth does not have.
+- A dataset is matched on its declared `country_key` and nothing else (see
+  `demscore.datasets`). Adding a dataset means choosing that key in the loader and in
+  `scripts/import_data_report.py`'s copy of the settings.
 - `webapp/config/variable_coverage.json` is derived from `demscore.dataset_values`. It is a
   build artefact, not a source of truth, and goes stale silently: rerun
   `scripts/build_variable_coverage.sh` after any reload.
@@ -740,7 +787,7 @@ Before merging changes:
    the best-covered variable-year of each dataset from the data rather than naming one.
 2. Confirm `GetCapabilities` and one `GetMap` request succeed.
 3. Verify the web UI can switch dataset, variable, year, and hex size.
-4. Validate SQL changes with at least one query for each dataset (`qog`, `repdem`, `v_dem`).
+4. Validate SQL changes with at least one query for each dataset (`qog`, `repdem`, `ucdp`, `v_dem`).
 4b. Run `./scripts/check_country_resolution.sh` if anything touched country matching,
    the resolution policy, the historical registry or the reference geometry. It fails on
    any source observation that lost its geometry, and its regression cases cover the

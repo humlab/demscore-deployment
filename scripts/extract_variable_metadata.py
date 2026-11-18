@@ -93,6 +93,8 @@ def parse_dataset_key(path: str) -> str:
         return "qog"
     if parent == "repdem":
         return "repdem"
+    if parent == "ucdp":
+        return "ucdp"
     if parent in {"v-dem", "v_dem", "vdem"}:
         return "v_dem"
     raise ValueError(f"Cannot infer dataset key from parent directory: {path}")

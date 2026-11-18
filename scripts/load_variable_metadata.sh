@@ -12,6 +12,7 @@ source "${ROOT_DIR}/scripts/lib/tools.sh"
 PDFS=(
   "${ROOT_DIR}/data/Demscore_Module_Vars/QoG/codebook.pdf"
   "${ROOT_DIR}/data/Demscore_Module_Vars/REPDEM/codebook.pdf"
+  "${ROOT_DIR}/data/Demscore_Module_Vars/UCDP/codebook.pdf"
   "${ROOT_DIR}/data/Demscore_Module_Vars/V-Dem/codebook.pdf"
 )
 
@@ -44,6 +45,7 @@ trap 'rm -rf "$tmp_dir"' EXIT
 
 qog_txt="${tmp_dir}/qog_codebook.txt"
 repdem_txt="${tmp_dir}/repdem_codebook.txt"
+ucdp_txt="${tmp_dir}/ucdp_codebook.txt"
 vdem_txt="${tmp_dir}/vdem_codebook.txt"
 raw_csv="${tmp_dir}/variable_metadata_raw.csv"
 sources_csv="${tmp_dir}/codebook_source_datasets.csv"
@@ -55,7 +57,8 @@ run_tool sh -euc '
   pdftotext -layout data/Demscore_Module_Vars/QoG/codebook.pdf "$1"
   pdftotext -layout data/Demscore_Module_Vars/REPDEM/codebook.pdf "$2"
   pdftotext -layout data/Demscore_Module_Vars/V-Dem/codebook.pdf "$3"
-' sh "$(tool_path "$qog_txt")" "$(tool_path "$repdem_txt")" "$(tool_path "$vdem_txt")"
+  pdftotext -layout data/Demscore_Module_Vars/UCDP/codebook.pdf "$4"
+' sh "$(tool_path "$qog_txt")" "$(tool_path "$repdem_txt")" "$(tool_path "$vdem_txt")" "$(tool_path "$ucdp_txt")"
 
 echo "Parsing codebook entries..."
 # The source paths are recorded in variable_metadata.source_pdf, so they are
@@ -67,6 +70,7 @@ run_tool python3 scripts/extract_variable_metadata.py \
   --citations-csv "$(tool_path "$citations_csv")" \
   --input "$(tool_path "$qog_txt")::data/Demscore_Module_Vars/QoG/codebook.pdf" \
   --input "$(tool_path "$repdem_txt")::data/Demscore_Module_Vars/REPDEM/codebook.pdf" \
+  --input "$(tool_path "$ucdp_txt")::data/Demscore_Module_Vars/UCDP/codebook.pdf" \
   --input "$(tool_path "$vdem_txt")::data/Demscore_Module_Vars/V-Dem/codebook.pdf"
 
 echo "Copying parsed metadata into DB container..."
@@ -723,6 +727,34 @@ JOIN demscore.variables v
  AND v.variable = rd.original_tag
 -- Runs last, so an earlier, more specific match always wins.
 ON CONFLICT (variable_id) DO NOTHING;
+
+-- UCDP publishes three estimates of every death count -- low, best and high --
+-- as three columns (sb_total_deaths_low, _best, _high), and the codebook
+-- describes all three in one entry titled, e.g., "Total Fatalities (Best/High/Low
+-- Estimates) in State-based Violence". A download carries only the columns it
+-- selected, and the title would claim three estimates beside a variable that is
+-- one. So the title names the one this column is: "Total fatalities in
+-- state-based violence (best estimate)". Sentence case, because the rewritten
+-- title is read as a phrase with the estimate at its end. Keyed on the wording
+-- and the column's suffix, not on UCDP, so it applies wherever both occur.
+WITH estimate_titles AS (
+  SELECT
+    vm.variable_id,
+    substring(v.variable FROM '_(best|high|low)$') AS estimate,
+    btrim(regexp_replace(
+      regexp_replace(vm.title, '\(?\s*Best\s*/\s*High\s*/\s*Low\s+Estimates?\s*\)?', ' ', 'gi'),
+      '\s+', ' ', 'g'
+    )) AS bare_title
+  FROM demscore.variable_metadata vm
+  JOIN demscore.variables v ON v.id = vm.variable_id
+  WHERE vm.title ~* 'Best\s*/\s*High\s*/\s*Low\s+Estimate'
+    AND v.variable ~ '_(best|high|low)$'
+)
+UPDATE demscore.variable_metadata vm
+SET title = upper(left(e.bare_title, 1)) || lower(substr(e.bare_title, 2))
+            || ' (' || e.estimate || ' estimate)'
+FROM estimate_titles e
+WHERE vm.variable_id = e.variable_id;
 
 -- REPDEM documents most of its indicators once per source sub-dataset — the basic
 -- collection and the WECEE (Western, Central and Eastern Europe) one — under the

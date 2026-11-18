@@ -64,6 +64,7 @@ module:
 ```
 data/Demscore_Module_Vars/QoG/data.csv      data/Demscore_Module_Vars/QoG/codebook.pdf
 data/Demscore_Module_Vars/REPDEM/data.csv   data/Demscore_Module_Vars/REPDEM/codebook.pdf
+data/Demscore_Module_Vars/UCDP/data.csv     data/Demscore_Module_Vars/UCDP/codebook.pdf
 data/Demscore_Module_Vars/V-Dem/data.csv    data/Demscore_Module_Vars/V-Dem/codebook.pdf
 ```
 

@@ -405,17 +405,24 @@ SELECT json_build_object(
     LEFT JOIN demscore.variable_metadata vm ON vm.variable_id = v.id
     WHERE NOT v.hidden
     GROUP BY v.dataset $q$),
+  'datasets', pg_temp.rows($q$
+    SELECT dataset, country_key, country_key_column FROM demscore.datasets ORDER BY 1 $q$),
+  'disagreements', pg_temp.rows($q$
+    SELECT dataset, country_key, iso3, country_name, gwcode, from_year, to_year, year_count,
+           drawn_as, drawn_as_source, other_key, other_key_says, decided_by_policy
+    FROM demscore.country_match_disagreements
+    ORDER BY decided_by_policy, dataset, country_name, from_year $q$),
   'audit', pg_temp.rows($q$
     SELECT dataset, resolution_status AS status,
-           count(DISTINCT COALESCE(iso3, '') || '|' || COALESCE(country_name, '')) AS entities,
+           count(DISTINCT COALESCE(iso3, '') || '|' || COALESCE(country_name, '') || '|' || COALESCE(gwcode::TEXT, '')) AS entities,
            sum(value_count) AS values
     FROM demscore.dataset_value_unmapped_audit GROUP BY 1, 2 $q$),
   'unresolved', pg_temp.rows($q$
-    SELECT dataset, COALESCE(iso3, '-') AS iso3, country_name,
+    SELECT dataset, COALESCE(iso3, '-') AS iso3, country_name, gwcode,
            min(year) AS from_year, max(year) AS to_year, sum(value_count) AS values
     FROM demscore.dataset_value_unmapped_audit
     WHERE resolution_status = 'unresolved'
-    GROUP BY 1, 2, 3 ORDER BY sum(value_count) DESC $q$)
+    GROUP BY 1, 2, 3, 4 ORDER BY sum(value_count) DESC $q$)
 );
 SQL
 }

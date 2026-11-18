@@ -38,15 +38,37 @@ class Dataset:
     year_col: str
     country_col: str
     iso_col: Optional[str]
+    gw_col: Optional[str]
+    # Which identifier the dataset is matched to the map on: "gwcode", "iso3"
+    # or "name". See demscore.datasets in the loader.
+    country_key: str
+
+    def country_key_col(self) -> str:
+        return {"gwcode": self.gw_col, "iso3": self.iso_col, "name": self.country_col}[self.country_key]
 
 
 # Must agree with the case block in scripts/load_demscore_module_vars.sh, which
 # is what actually reads these columns.
 DATASETS = [
-    Dataset("QoG", "qog", "u_qog_country_year_year", "u_qog_country_year_country", "u_qog_country_year_ccodealp"),
-    Dataset("REPDEM", "repdem", "u_repdem_country_year_year", "u_repdem_country_year_country", None),
-    Dataset("V-Dem", "v_dem", "u_vdem_country_year_year", "u_vdem_country_year_country", "u_vdem_country_year_country_text_id"),
+    Dataset("QoG", "qog", "u_qog_country_year_year", "u_qog_country_year_country",
+            "u_qog_country_year_ccodealp", None, "iso3"),
+    Dataset("REPDEM", "repdem", "u_repdem_country_year_year", "u_repdem_country_year_country",
+            None, None, "name"),
+    Dataset("UCDP", "ucdp", "u_ucdp_orgv_country_year_year", "u_ucdp_orgv_country_year_country",
+            None, "u_ucdp_orgv_country_year_country_id", "gwcode"),
+    Dataset("V-Dem", "v_dem", "u_vdem_country_year_year", "u_vdem_country_year_country",
+            "u_vdem_country_year_country_text_id", None, "iso3"),
 ]
+
+# What a value of each kind of country identifier has to look like. A column
+# whose values do not fit was declared as the wrong kind, or the export changed
+# under it; either way the rows would reach the map unmatched. The check is of
+# form only: whether a code is one the map knows is settled at map setup.
+COUNTRY_KEY_RE = {
+    "gwcode": re.compile(r"^[0-9]{1,4}$"),
+    "iso3": re.compile(r"^[A-Za-z]{3}$"),
+    "name": re.compile(r"\S"),
+}
 
 # The same rules the loader applies (MISSING_CODES, NA_TOKENS and the numeric
 # pattern in scripts/load_demscore_module_vars.sh). The loader is the authority;
@@ -185,7 +207,7 @@ def inspect_csv(ds: Dataset, csv_path: Path, problems: List[Dict[str, str]]) -> 
                 problem("error", f"column name(s) longer than {MAX_IDENTIFIER_BYTES} bytes, which "
                                  f"Postgres would truncate: {fmt_list(long_names)}")
 
-            required = [c for c in (ds.year_col, ds.country_col, ds.iso_col) if c]
+            required = [c for c in (ds.year_col, ds.country_col, ds.iso_col, ds.gw_col) if c]
             missing = [c for c in required if c not in seen]
             if missing:
                 problem("error", f"required identifier column(s) missing: {', '.join(missing)}")
@@ -195,6 +217,10 @@ def inspect_csv(ds: Dataset, csv_path: Path, problems: List[Dict[str, str]]) -> 
             year_i = index[ds.year_col]
             country_i = index[ds.country_col]
             iso_i = index[ds.iso_col] if ds.iso_col else None
+            key_i = index[ds.country_key_col()]
+            key_re = COUNTRY_KEY_RE[ds.country_key]
+            key_misfits = 0
+            key_misfit_examples: List[str] = []
             identifiers = [n for n in header if n.startswith("u_")]
             candidates = [n for n in header if not n.startswith("u_")]
             facts["identifier_columns"] = len(identifiers)
@@ -226,6 +252,11 @@ def inspect_csv(ds: Dataset, csv_path: Path, problems: List[Dict[str, str]]) -> 
                         out_of_range += 1
                 else:
                     no_year += 1
+                key_value = row[key_i].strip()
+                if not key_re.search(key_value):
+                    key_misfits += 1
+                    if len(key_misfit_examples) < 3 and key_value not in key_misfit_examples:
+                        key_misfit_examples.append(key_value or "(empty)")
                 country = row[country_i].strip()
                 iso = row[iso_i].strip() if iso_i is not None else ""
                 if country:
@@ -276,6 +307,11 @@ def inspect_csv(ds: Dataset, csv_path: Path, problems: List[Dict[str, str]]) -> 
                            "the years the map can be asked for")
     if no_country:
         problem("warning", f"{fmt_int(no_country)} row(s) name no country and cannot be placed on the map")
+    if key_misfits:
+        kind = {"gwcode": "a Gleditsch-Ward code", "iso3": "an ISO3 code", "name": "a country name"}[ds.country_key]
+        problem("error", f"{fmt_int(key_misfits)} row(s) have no {kind} in {ds.country_key_col()}, which this "
+                         f"dataset is matched to the map on (e.g. {', '.join(key_misfit_examples)}); "
+                         "they would be left off the map and map setup would fail on them")
     if rows and not ragged and not predicted:
         problem("error", "no column would import as an indicator (every candidate is text, empty "
                          "or only missing codes); the load would refuse this dataset")
@@ -564,9 +600,14 @@ def cmd_summary(args: argparse.Namespace) -> int:
         else:
             audit = facts.get("audit")
             audit_by = {(r["dataset"], r["status"]): r for r in audit or []}
+            key_by = {r["dataset"]: r for r in facts.get("datasets") or []}
+            key_words = {"gwcode": "Gleditsch-Ward code", "iso3": "ISO3", "name": "name"}
             for ds in DATASETS:
                 c = counts.get(ds.key) or {}
+                matched_on = key_words.get((key_by.get(ds.key) or {}).get("country_key"), "")
                 line = f"  {ds.key:<8} {fmt_int(c.get('countries'))} countries on the map"
+                if matched_on:
+                    line += f", matched on {matched_on}"
                 unsupported = audit_by.get((ds.key, "intentionally_unsupported"))
                 if unsupported:
                     line += (f"; {fmt_int(unsupported['values'])} values from {unsupported['entities']} "
@@ -577,11 +618,35 @@ def cmd_summary(args: argparse.Namespace) -> int:
             if unresolved:
                 p(f"  UNRESOLVED: {len(unresolved)} source entit(ies) have no geometry and no policy saying why:")
                 for r in unresolved[:LIST_LIMIT]:
-                    p(f"    {r['dataset']:<7} {r['country_name']} ({r['iso3']}), {r['from_year']}–{r['to_year']}, "
+                    code = r['iso3'] if r.get('gwcode') is None else f"{r['iso3']}, Gleditsch-Ward {r['gwcode']}"
+                    p(f"    {r['dataset']:<7} {r['country_name']} ({code}), {r['from_year']}–{r['to_year']}, "
                       f"{fmt_int(r['values'])} values")
                 if len(unresolved) > LIST_LIMIT:
                     p(f"    … and {len(unresolved) - LIST_LIMIT} more")
-                p("  Each needs geometry or an 'intentionally_unsupported' row in sql/historical_geometry.sql.")
+                p("  Each needs geometry or an 'intentionally_unsupported' row in sql/historical_geometry.sql;")
+                p("  a Gleditsch-Ward code may only be missing from demscore.gwcode_natural_earth there.")
+
+            # Where an identifier a dataset was not matched on names a different
+            # country (demscore.country_match_disagreements). Those a policy row
+            # decided are expected and only counted; the rest are listed, since one
+            # of the two identifiers, or a table, is wrong.
+            disagreements = facts.get("disagreements") or []
+            out["disagreements"] = disagreements
+            decided = [r for r in disagreements if r.get("decided_by_policy")]
+            undecided = [r for r in disagreements if not r.get("decided_by_policy")]
+            if decided:
+                p(f"  {len(decided)} source entit(ies) are drawn other than their {', '.join(sorted({key_words.get(r['other_key'], r['other_key']) for r in decided}))} "
+                  "would say, by a written decision (e.g. West Germany for UCDP's 1989 'Germany')")
+            if undecided:
+                p(f"  CHECK: {len(undecided)} source entit(ies) where two of the source's own identifiers name "
+                  "different countries and no decision says which is right:")
+                for r in undecided[:LIST_LIMIT]:
+                    p(f"    {r['dataset']:<7} {r['country_name']}, {r['from_year']}–{r['to_year']}: drawn as "
+                      f"{r['drawn_as']} (by {key_words.get(r['country_key'], r['country_key'])}), "
+                      f"its {key_words.get(r['other_key'], r['other_key'])} says {r['other_key_says']}")
+                if len(undecided) > LIST_LIMIT:
+                    p(f"    … and {len(undecided) - LIST_LIMIT} more")
+                warnings.append(f"{len(undecided)} source entit(ies) whose identifiers disagree about the country")
         map_log = next((Path(s["log"]) for s in stages if s["key"] == "map"), None)
         if map_log and map_log.is_file():
             skipped = [line.split(":", 1)[1].strip() for line in map_log.read_text(errors="replace").splitlines()

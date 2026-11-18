@@ -2,7 +2,9 @@
 -- source observation is allowed to become.
 --
 -- Run after the ogr2ogr imports in scripts/setup_mapserver_hex_service.sh and
--- before sql/mapserver_hex_setup.sql, which reads both tables this file builds.
+-- before sql/mapserver_hex_setup.sql, which reads the three tables this file
+-- builds: the geometry registry, the resolution policy, and the table from
+-- Gleditsch-Ward code to present-day Natural Earth country.
 --
 -- Why a second historical layer at all: demscore.cshapes_src is CShapes 2.0,
 -- which starts in 1886. V-Dem reaches back to 1789, and roughly 145 000 of its
@@ -51,6 +53,7 @@ $$;
 -- so it has to go first when this file is re-run on a built database.
 DROP TABLE IF EXISTS demscore.historical_country_geometries_src CASCADE;
 DROP TABLE IF EXISTS demscore.country_resolution_policy CASCADE;
+DROP TABLE IF EXISTS demscore.gwcode_natural_earth CASCADE;
 -- The table the policy table replaces. Dropped so a redeploy over a database
 -- built before this file leaves nothing behind that still looks authoritative.
 DROP TABLE IF EXISTS demscore.country_aliases CASCADE;
@@ -476,6 +479,37 @@ WHERE src.registry_key = 'v_dem_south_yemen_aden_approx'
   AND src.geom IS NOT NULL
   AND NOT ST_IsEmpty(ST_CollectionExtract(ST_MakeValid(src.geom), 3));
 
+-- 1g. Israel with Gaza and the West Bank, for UCDP after CShapes 2.0 ends.
+--
+-- UCDP codes organised violence by the territory it happened on, and has no
+-- Palestine unit, so its Israel figures are taken to include Gaza and the West
+-- Bank (an assumption, not yet confirmed by Demscore).
+-- CShapes 2.0's Israel from 1979 already draws Israel together with both, and
+-- the policy sends UCDP's 1989-2019 there. CShapes stops at 2019; this carries
+-- its last Israel polygon forward, for the years 2023-2025 above all.
+INSERT INTO demscore.historical_country_geometries_src
+  (registry_key, source_dataset, source_license, source_url, source_citation,
+   source_snapshot_year, source_name, normalized_name,
+   valid_from_year, valid_to_year, confidence, notes, geom)
+SELECT
+  'ucdp_israel_with_territories',
+  'cshapes_2.0_derived',
+  'CC BY-NC-SA 4.0',
+  'https://icr.ethz.ch/data/cshapes/CShapes-2.0.geojson',
+  'Schvitz, Girardin, Rüegger, Weidmann, Cederman and Gleditsch (2022), Mapping the International System, 1886-2019: The CShapes 2.0 Dataset, Journal of Conflict Resolution 66(1): 144-161.',
+  NULL,
+  s.cntry_name,
+  'Israel (with Gaza and the West Bank)',
+  2020,
+  demscore.historical_geometry_open_end(),
+  'medium',
+  'CShapes 2.0''s 1979-2019 Israel polygon, which includes Gaza and the West Bank, carried past the end of CShapes. Drawn for UCDP, whose Israel unit is assumed to cover both territories; Demscore has been asked to confirm.',
+  ST_Multi(ST_CollectionExtract(ST_MakeValid(s.geom), 3))::geometry(MultiPolygon, 4326)
+FROM demscore.cshapes_src s
+WHERE s.gwcode = 666
+ORDER BY s.gwsyear DESC
+LIMIT 1;
+
 CREATE INDEX historical_country_geometries_key_idx
   ON demscore.historical_country_geometries_src (registry_key, valid_from_year, valid_to_year);
 CREATE INDEX historical_country_geometries_geom_gix
@@ -498,11 +532,20 @@ ANALYZE demscore.historical_country_geometries_src;
 -- `intentionally_unsupported` row here. scripts/check_country_resolution.sh
 -- fails the setup if any is not.
 
+--
+-- A row names its source entity by whichever identifiers the dataset carries
+-- (ISO3, name, Gleditsch-Ward code); every one it sets has to match. It names its
+-- target by status: a Natural Earth country by `target_adm0_a3` -- Natural Earth's
+-- own country code, which is the ISO code for most countries and Natural Earth's
+-- own where there is none (KOS for Kosovo, SOL for Somaliland) -- or by name, a
+-- CShapes 2.0 country by Gleditsch-Ward code (the year picks the period), or a
+-- registry key.
 CREATE TABLE demscore.country_resolution_policy (
   id BIGSERIAL PRIMARY KEY,
   dataset TEXT NOT NULL,
   source_iso3 TEXT,
   source_name TEXT,
+  source_gwcode INTEGER,
   -- The window of *source* years this row governs. NULL is open at that end.
   from_year INTEGER,
   to_year INTEGER,
@@ -512,40 +555,78 @@ CREATE TABLE demscore.country_resolution_policy (
     'historical_registry',
     'intentionally_unsupported'
   )),
-  target_iso3 TEXT,
+  target_adm0_a3 TEXT,
   target_name TEXT,
   target_gwcode INTEGER,
   target_registry_key TEXT,
   reason TEXT,
   note TEXT,
-  CHECK (source_iso3 IS NOT NULL OR source_name IS NOT NULL),
+  CHECK (source_iso3 IS NOT NULL OR source_name IS NOT NULL OR source_gwcode IS NOT NULL),
   CHECK (
     (status = 'natural_earth'
-      AND (target_iso3 IS NOT NULL OR target_name IS NOT NULL)
+      AND (target_adm0_a3 IS NOT NULL OR target_name IS NOT NULL)
       AND target_gwcode IS NULL AND target_registry_key IS NULL)
     OR
     (status = 'cshapes'
       AND target_gwcode IS NOT NULL
-      AND target_iso3 IS NULL AND target_registry_key IS NULL)
+      AND target_adm0_a3 IS NULL AND target_registry_key IS NULL)
     OR
     (status = 'historical_registry'
       AND target_registry_key IS NOT NULL
-      AND target_iso3 IS NULL AND target_gwcode IS NULL)
+      AND target_adm0_a3 IS NULL AND target_gwcode IS NULL)
     OR
     (status = 'intentionally_unsupported'
       AND reason IS NOT NULL
-      AND target_iso3 IS NULL AND target_gwcode IS NULL AND target_registry_key IS NULL)
+      AND target_adm0_a3 IS NULL AND target_gwcode IS NULL AND target_registry_key IS NULL)
   )
 );
 
+-- Whether a policy row governs one source observation. The one place this is
+-- written: every matching pass, the refusal pass, the audit and
+-- demscore.source_coverage() call it, so a fourth kind of source identifier is
+-- one edit here rather than eight that have to agree. A NULL year asks whether
+-- the row names this entity at all, in any year.
+CREATE OR REPLACE FUNCTION demscore.policy_covers(
+  p demscore.country_resolution_policy,
+  p_dataset TEXT,
+  p_iso3 TEXT,
+  p_name TEXT,
+  p_gwcode INTEGER,
+  p_year INTEGER
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+AS $$
+  SELECT p.dataset = p_dataset
+     AND (p.source_iso3 IS NULL OR COALESCE(upper(p.source_iso3) = upper(p_iso3), FALSE))
+     AND (p.source_name IS NULL OR COALESCE(lower(p.source_name) = lower(p_name), FALSE))
+     AND (p.source_gwcode IS NULL OR COALESCE(p.source_gwcode = p_gwcode, FALSE))
+     AND (p_year IS NULL OR (
+       (p.from_year IS NULL OR p_year >= p.from_year)
+       AND (p.to_year IS NULL OR p_year <= p.to_year)
+     ))
+$$;
+
 INSERT INTO demscore.country_resolution_policy
   (dataset, source_iso3, source_name, from_year, to_year,
-   status, target_iso3, target_name, target_gwcode, target_registry_key, reason, note)
+   status, target_adm0_a3, target_name, target_gwcode, target_registry_key, reason, note)
 VALUES
   -- Current-country naming mismatch: REPDEM has no ISO column and Natural
   -- Earth's stored long name is "Czech Republic" even though NAME is "Czechia".
   ('repdem', NULL, 'Czechia', NULL, NULL, 'natural_earth', 'CZE', NULL, NULL, NULL, NULL,
    'REPDEM source name; Natural Earth NAME_LONG is Czech Republic'),
+
+  -- V-Dem codes these two with codes of its own, and Natural Earth has no ISO
+  -- code for either: Kosovo has none officially (XKX is a convention), and
+  -- Somaliland is not a recognised state. Natural Earth draws both, under its
+  -- own codes. They used to reach the map through the name pass, which V-Dem no
+  -- longer falls back to: a dataset is matched on the one identifier it is
+  -- declared to carry (demscore.datasets).
+  ('v_dem', 'XKX', 'Kosovo',     NULL, NULL, 'natural_earth', 'KOS', NULL, NULL, NULL, NULL,
+   'V-Dem code; Natural Earth ADM0_A3 is KOS and it has no ISO code'),
+  ('v_dem', 'SML', 'Somaliland', NULL, NULL, 'natural_earth', 'SOL', NULL, NULL, NULL, NULL,
+   'V-Dem code; Natural Earth ADM0_A3 is SOL and it has no ISO code'),
 
   -- Historical countries present in QoG and covered by CShapes 2.0.
   ('qog', 'YUG', 'Yugoslavia',                 NULL, NULL, 'cshapes', NULL, NULL,  345, NULL, NULL, 'Yugoslavia, Gleditsch-Ward 345'),
@@ -602,19 +683,283 @@ VALUES
   ('v_dem', 'TWS', 'Two Sicilies',          NULL, NULL, 'historical_registry', NULL, NULL, NULL, 'v_dem_two_sicilies',          NULL, NULL),
   ('v_dem', 'WRG', 'Würtemberg',            NULL, NULL, 'historical_registry', NULL, NULL, NULL, 'v_dem_wurttemberg',           NULL, NULL);
 
+-- UCDP, named by Gleditsch-Ward code. UCDP counts organised violence by the
+-- territory it happened on, and keeps one code for a state across a change of
+-- territory, so each row below sends the years before the change to the outline
+-- that was in force. The years after it fall through to demscore.gwcode_natural_earth.
+-- A year in which CShapes 2.0 has two periods (1990 for Germany and Yemen) gets the
+-- later one, which is the post-change state; those years are left to Natural Earth.
+INSERT INTO demscore.country_resolution_policy
+  (dataset, source_gwcode, from_year, to_year,
+   status, target_gwcode, target_registry_key, note)
+VALUES
+  -- States that no longer exist.
+  ('ucdp', 265, NULL, NULL, 'cshapes', 265, NULL, 'German Democratic Republic, 1989-1990'),
+  ('ucdp', 315, NULL, NULL, 'cshapes', 315, NULL, 'Czechoslovakia, 1989-1992'),
+  ('ucdp', 680, NULL, NULL, 'cshapes', 680, NULL, 'South Yemen, 1989-1990'),
+
+  -- One code across a merger or a break-up.
+  ('ucdp', 260, NULL, 1989, 'cshapes', 260, NULL,
+   'West Germany before unification; unified Germany from 1990'),
+  ('ucdp', 678, NULL, 1989, 'cshapes', 678, NULL,
+   'North Yemen before unification; unified Yemen from 1990'),
+  ('ucdp', 365, NULL, 1991, 'cshapes', 365, NULL,
+   'The Soviet Union; Russia from 1992, when UCDP has every other successor state'),
+  ('ucdp', 345, NULL, 2005, 'cshapes', 345, NULL,
+   'Yugoslavia: the federation to 1991 (with Croatia, whose war UCDP counts here until Croatia begins in 1992), then Serbia and Montenegro'),
+  ('ucdp', 345, 2006, 2007, 'cshapes', 340, NULL,
+   'Serbia with Kosovo, between Montenegro leaving in 2006 and Kosovo beginning in 2008'),
+
+  -- A present-day country that held more territory in these years.
+  ('ucdp', 530, NULL, 1992, 'cshapes', 530, NULL, 'Ethiopia with Eritrea, until Eritrea begins in 1993'),
+  ('ucdp', 625, NULL, 2010, 'cshapes', 625, NULL, 'Sudan with South Sudan, until South Sudan begins in 2011'),
+  ('ucdp', 850, NULL, 2001, 'cshapes', 850, NULL, 'Indonesia with East Timor, until East Timor begins in 2002'),
+
+  -- Israel with Gaza and the West Bank, which UCDP has no unit for. Assumed,
+  -- not yet confirmed by Demscore.
+  ('ucdp', 666, NULL, 2019, 'cshapes', 666, NULL,
+   'Israel with Gaza and the West Bank (CShapes 2.0 from 1979)'),
+  ('ucdp', 666, 2020, NULL, 'historical_registry', NULL, 'ucdp_israel_with_territories',
+   'Israel with Gaza and the West Bank, CShapes 2.0''s 2019 polygon carried forward');
+
 CREATE INDEX country_resolution_policy_dataset_idx
   ON demscore.country_resolution_policy (dataset);
 CREATE INDEX country_resolution_policy_source_iso3_idx
   ON demscore.country_resolution_policy (upper(source_iso3));
 CREATE INDEX country_resolution_policy_source_name_idx
   ON demscore.country_resolution_policy (lower(source_name));
+CREATE INDEX country_resolution_policy_source_gwcode_idx
+  ON demscore.country_resolution_policy (source_gwcode);
 CREATE INDEX country_resolution_policy_registry_key_idx
   ON demscore.country_resolution_policy (target_registry_key);
 
 ANALYZE demscore.country_resolution_policy;
 
 -- ---------------------------------------------------------------------------
--- 3. Integrity of the two tables against each other
+-- 2b. Gleditsch-Ward code to present-day Natural Earth country
+-- ---------------------------------------------------------------------------
+--
+-- For a dataset matched on Gleditsch-Ward codes (demscore.datasets), the
+-- present-day country each code stands for. Natural Earth carries no
+-- Gleditsch-Ward codes, so this is written down here. It is a fact about two
+-- code lists, not a decision: the decisions -- which years of a code belong to
+-- an outline that has since changed -- are policy rows above, and run first.
+-- A code that is in the data and neither here nor in a policy row is an
+-- unresolved observation, and setup fails on it.
+--
+-- `label` is UCDP's name for the unit, for whoever reads this table; matching
+-- uses the code alone. Rows marked "by hand" are those whose name does not match
+-- Natural Earth's; every other row was taken from a name match and checked
+-- against it. The three former states (265, 315, 680) are absent on purpose:
+-- they have no present-day country.
+CREATE TABLE demscore.gwcode_natural_earth (
+  gwcode INTEGER PRIMARY KEY,
+  adm0_a3 TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL
+);
+
+INSERT INTO demscore.gwcode_natural_earth (gwcode, adm0_a3, label) VALUES
+  (  2, 'USA', 'United States of America'        ),  -- by hand
+  ( 20, 'CAN', 'Canada'                          ),
+  ( 31, 'BHS', 'Bahamas'                         ),
+  ( 40, 'CUB', 'Cuba'                            ),
+  ( 41, 'HTI', 'Haiti'                           ),
+  ( 42, 'DOM', 'Dominican Republic'              ),
+  ( 51, 'JAM', 'Jamaica'                         ),
+  ( 52, 'TTO', 'Trinidad and Tobago'             ),
+  ( 53, 'BRB', 'Barbados'                        ),
+  ( 54, 'DMA', 'Dominica'                        ),
+  ( 55, 'GRD', 'Grenada'                         ),
+  ( 56, 'LCA', 'Saint Lucia'                     ),
+  ( 57, 'VCT', 'Saint Vincent and the Grenadines'),
+  ( 58, 'ATG', 'Antigua & Barbuda'               ),  -- by hand
+  ( 60, 'KNA', 'Saint Kitts and Nevis'           ),
+  ( 70, 'MEX', 'Mexico'                          ),
+  ( 80, 'BLZ', 'Belize'                          ),
+  ( 90, 'GTM', 'Guatemala'                       ),
+  ( 91, 'HND', 'Honduras'                        ),
+  ( 92, 'SLV', 'El Salvador'                     ),
+  ( 93, 'NIC', 'Nicaragua'                       ),
+  ( 94, 'CRI', 'Costa Rica'                      ),
+  ( 95, 'PAN', 'Panama'                          ),
+  (100, 'COL', 'Colombia'                        ),
+  (101, 'VEN', 'Venezuela'                       ),
+  (110, 'GUY', 'Guyana'                          ),
+  (115, 'SUR', 'Suriname'                        ),
+  (130, 'ECU', 'Ecuador'                         ),
+  (135, 'PER', 'Peru'                            ),
+  (140, 'BRA', 'Brazil'                          ),
+  (145, 'BOL', 'Bolivia'                         ),
+  (150, 'PRY', 'Paraguay'                        ),
+  (155, 'CHL', 'Chile'                           ),
+  (160, 'ARG', 'Argentina'                       ),
+  (165, 'URY', 'Uruguay'                         ),
+  (200, 'GBR', 'United Kingdom'                  ),
+  (205, 'IRL', 'Ireland'                         ),
+  (210, 'NLD', 'Netherlands'                     ),
+  (211, 'BEL', 'Belgium'                         ),
+  (212, 'LUX', 'Luxembourg'                      ),
+  (220, 'FRA', 'France'                          ),
+  (221, 'MCO', 'Monaco'                          ),
+  (223, 'LIE', 'Liechtenstein'                   ),
+  (225, 'CHE', 'Switzerland'                     ),
+  (230, 'ESP', 'Spain'                           ),
+  (232, 'AND', 'Andorra'                         ),
+  (235, 'PRT', 'Portugal'                        ),
+  (260, 'DEU', 'Germany'                         ),
+  (290, 'POL', 'Poland'                          ),
+  (305, 'AUT', 'Austria'                         ),
+  (310, 'HUN', 'Hungary'                         ),
+  (316, 'CZE', 'Czech Republic'                  ),
+  (317, 'SVK', 'Slovakia'                        ),
+  (325, 'ITA', 'Italy'                           ),
+  (327, 'VAT', 'Vatican City State'              ),  -- by hand
+  (331, 'SMR', 'San Marino'                      ),
+  (338, 'MLT', 'Malta'                           ),
+  (339, 'ALB', 'Albania'                         ),
+  (341, 'MNE', 'Montenegro'                      ),
+  (343, 'MKD', 'North Macedonia'                 ),
+  (344, 'HRV', 'Croatia'                         ),
+  (345, 'SRB', 'Serbia (Yugoslavia)'             ),  -- by hand
+  (346, 'BIH', 'Bosnia-Herzegovina'              ),  -- by hand
+  (347, 'KOS', 'Kosovo'                          ),
+  (349, 'SVN', 'Slovenia'                        ),
+  (350, 'GRC', 'Greece'                          ),
+  (352, 'CYP', 'Cyprus'                          ),
+  (355, 'BGR', 'Bulgaria'                        ),
+  (359, 'MDA', 'Moldova'                         ),
+  (360, 'ROU', 'Romania'                         ),
+  (365, 'RUS', 'Russia (Soviet Union)'           ),  -- by hand
+  (366, 'EST', 'Estonia'                         ),
+  (367, 'LVA', 'Latvia'                          ),
+  (368, 'LTU', 'Lithuania'                       ),
+  (369, 'UKR', 'Ukraine'                         ),
+  (370, 'BLR', 'Belarus'                         ),
+  (371, 'ARM', 'Armenia'                         ),
+  (372, 'GEO', 'Georgia'                         ),
+  (373, 'AZE', 'Azerbaijan'                      ),
+  (375, 'FIN', 'Finland'                         ),
+  (380, 'SWE', 'Sweden'                          ),
+  (385, 'NOR', 'Norway'                          ),
+  (390, 'DNK', 'Denmark'                         ),
+  (395, 'ISL', 'Iceland'                         ),
+  (402, 'CPV', 'Cape Verde'                      ),  -- by hand
+  (403, 'STP', 'Sao Tome and Principe'           ),  -- by hand
+  (404, 'GNB', 'Guinea-Bissau'                   ),
+  (411, 'GNQ', 'Equatorial Guinea'               ),
+  (420, 'GMB', 'Gambia'                          ),  -- by hand
+  (432, 'MLI', 'Mali'                            ),
+  (433, 'SEN', 'Senegal'                         ),
+  (434, 'BEN', 'Benin'                           ),
+  (435, 'MRT', 'Mauritania'                      ),
+  (436, 'NER', 'Niger'                           ),
+  (437, 'CIV', 'Ivory Coast'                     ),  -- by hand
+  (438, 'GIN', 'Guinea'                          ),
+  (439, 'BFA', 'Burkina Faso'                    ),
+  (450, 'LBR', 'Liberia'                         ),
+  (451, 'SLE', 'Sierra Leone'                    ),
+  (452, 'GHA', 'Ghana'                           ),
+  (461, 'TGO', 'Togo'                            ),
+  (471, 'CMR', 'Cameroon'                        ),
+  (475, 'NGA', 'Nigeria'                         ),
+  (481, 'GAB', 'Gabon'                           ),
+  (482, 'CAF', 'Central African Republic'        ),
+  (483, 'TCD', 'Chad'                            ),
+  (484, 'COG', 'Congo'                           ),  -- by hand
+  (490, 'COD', 'DR Congo (Zaire)'                ),  -- by hand
+  (500, 'UGA', 'Uganda'                          ),
+  (501, 'KEN', 'Kenya'                           ),
+  (510, 'TZA', 'Tanzania'                        ),
+  (516, 'BDI', 'Burundi'                         ),
+  (517, 'RWA', 'Rwanda'                          ),
+  (520, 'SOM', 'Somalia'                         ),
+  (522, 'DJI', 'Djibouti'                        ),
+  (530, 'ETH', 'Ethiopia'                        ),
+  (531, 'ERI', 'Eritrea'                         ),
+  (540, 'AGO', 'Angola'                          ),
+  (541, 'MOZ', 'Mozambique'                      ),
+  (551, 'ZMB', 'Zambia'                          ),
+  (552, 'ZWE', 'Zimbabwe (Rhodesia)'             ),  -- by hand
+  (553, 'MWI', 'Malawi'                          ),
+  (560, 'ZAF', 'South Africa'                    ),
+  (565, 'NAM', 'Namibia'                         ),
+  (570, 'LSO', 'Lesotho'                         ),
+  (571, 'BWA', 'Botswana'                        ),
+  (572, 'SWZ', 'Kingdom of eSwatini (Swaziland)' ),  -- by hand
+  (580, 'MDG', 'Madagascar (Malagasy)'           ),  -- by hand
+  (581, 'COM', 'Comoros'                         ),
+  (590, 'MUS', 'Mauritius'                       ),
+  (591, 'SYC', 'Seychelles'                      ),
+  (600, 'MAR', 'Morocco'                         ),
+  (615, 'DZA', 'Algeria'                         ),
+  (616, 'TUN', 'Tunisia'                         ),
+  (620, 'LBY', 'Libya'                           ),
+  (625, 'SDN', 'Sudan'                           ),
+  (626, 'SDS', 'South Sudan'                     ),
+  (630, 'IRN', 'Iran'                            ),
+  (640, 'TUR', 'Turkey'                          ),
+  (645, 'IRQ', 'Iraq'                            ),
+  (651, 'EGY', 'Egypt'                           ),
+  (652, 'SYR', 'Syria'                           ),
+  (660, 'LBN', 'Lebanon'                         ),
+  (663, 'JOR', 'Jordan'                          ),
+  (666, 'ISR', 'Israel'                          ),
+  (670, 'SAU', 'Saudi Arabia'                    ),
+  (678, 'YEM', 'Yemen (North Yemen)'             ),  -- by hand
+  (690, 'KWT', 'Kuwait'                          ),
+  (692, 'BHR', 'Bahrain'                         ),
+  (694, 'QAT', 'Qatar'                           ),
+  (696, 'ARE', 'United Arab Emirates'            ),
+  (698, 'OMN', 'Oman'                            ),
+  (700, 'AFG', 'Afghanistan'                     ),
+  (701, 'TKM', 'Turkmenistan'                    ),
+  (702, 'TJK', 'Tajikistan'                      ),
+  (703, 'KGZ', 'Kyrgyzstan'                      ),
+  (704, 'UZB', 'Uzbekistan'                      ),
+  (705, 'KAZ', 'Kazakhstan'                      ),
+  (710, 'CHN', 'China'                           ),
+  (712, 'MNG', 'Mongolia'                        ),
+  (713, 'TWN', 'Taiwan'                          ),
+  (731, 'PRK', 'North Korea'                     ),  -- by hand
+  (732, 'KOR', 'South Korea'                     ),  -- by hand
+  (740, 'JPN', 'Japan'                           ),
+  (750, 'IND', 'India'                           ),
+  (760, 'BTN', 'Bhutan'                          ),
+  (770, 'PAK', 'Pakistan'                        ),
+  (771, 'BGD', 'Bangladesh'                      ),
+  (775, 'MMR', 'Myanmar (Burma)'                 ),  -- by hand
+  (780, 'LKA', 'Sri Lanka'                       ),
+  (781, 'MDV', 'Maldives'                        ),
+  (790, 'NPL', 'Nepal'                           ),
+  (800, 'THA', 'Thailand'                        ),
+  (811, 'KHM', 'Cambodia (Kampuchea)'            ),  -- by hand
+  (812, 'LAO', 'Laos'                            ),  -- by hand
+  (816, 'VNM', 'Vietnam (North Vietnam)'         ),  -- by hand
+  (820, 'MYS', 'Malaysia'                        ),
+  (830, 'SGP', 'Singapore'                       ),
+  (835, 'BRN', 'Brunei'                          ),  -- by hand
+  (840, 'PHL', 'Philippines'                     ),
+  (850, 'IDN', 'Indonesia'                       ),
+  (860, 'TLS', 'East Timor'                      ),  -- by hand
+  (900, 'AUS', 'Australia'                       ),
+  (910, 'PNG', 'Papua New Guinea'                ),
+  (920, 'NZL', 'New Zealand'                     ),
+  (935, 'VUT', 'Vanuatu'                         ),
+  (940, 'SLB', 'Solomon Islands'                 ),
+  (950, 'FJI', 'Fiji'                            ),
+  (970, 'KIR', 'Kiribati'                        ),
+  (971, 'NRU', 'Nauru'                           ),
+  (972, 'TON', 'Tonga'                           ),
+  (973, 'TUV', 'Tuvalu'                          ),
+  (983, 'MHL', 'Marshall Islands'                ),
+  (986, 'PLW', 'Palau'                           ),
+  (987, 'FSM', 'Federated States of Micronesia'  ),
+  (990, 'WSM', 'Samoa (Western Samoa)'           );  -- by hand
+
+ANALYZE demscore.gwcode_natural_earth;
+
+-- ---------------------------------------------------------------------------
+-- 3. Integrity of the tables against each other and their sources
 -- ---------------------------------------------------------------------------
 --
 -- Both tables are hand-written, and a typo in a registry key would otherwise
@@ -645,6 +990,34 @@ BEGIN
   );
   IF uncovered IS NOT NULL THEN
     RAISE EXCEPTION 'Registry holds geometry no resolution policy points at: %', uncovered;
+  END IF;
+
+  -- The Gleditsch-Ward table and the natural_earth policy rows name Natural
+  -- Earth countries by code; a code Natural Earth does not carry would leave
+  -- every observation of that country unmatched.
+  SELECT string_agg(DISTINCT x.code, ', ')
+    INTO dangling
+  FROM (
+    SELECT g.adm0_a3 AS code FROM demscore.gwcode_natural_earth g
+    UNION ALL
+    SELECT p.target_adm0_a3 FROM demscore.country_resolution_policy p
+    WHERE p.status = 'natural_earth' AND p.target_adm0_a3 IS NOT NULL
+  ) x
+  WHERE NOT EXISTS (
+    SELECT 1 FROM demscore.countries_src s
+    WHERE upper(NULLIF(NULLIF(s.adm0_a3, ''), '-99')) = upper(x.code)
+  );
+  IF dangling IS NOT NULL THEN
+    RAISE EXCEPTION 'Natural Earth has no country with ADM0_A3: %', dangling;
+  END IF;
+
+  SELECT string_agg(DISTINCT p.target_gwcode::TEXT, ', ')
+    INTO dangling
+  FROM demscore.country_resolution_policy p
+  WHERE p.status = 'cshapes'
+    AND NOT EXISTS (SELECT 1 FROM demscore.cshapes_src s WHERE s.gwcode = p.target_gwcode);
+  IF dangling IS NOT NULL THEN
+    RAISE EXCEPTION 'Resolution policy points at Gleditsch-Ward codes CShapes 2.0 does not carry: %', dangling;
   END IF;
 END;
 $$;
