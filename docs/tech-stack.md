@@ -6,8 +6,8 @@ for developers. [operations.md](operations.md) covers running the stack, and
 
 ## In one paragraph
 
-Demscore turns tables of democracy indicators (V-Dem, QoG, REPDEM) into a world
-map of hexagons. The data, the country boundaries and the hexagon meshes are
+Demscore turns tables of democracy and conflict indicators (V-Dem, QoG, REPDEM,
+UCDP) into a world map of hexagons. The data, the country boundaries and the hexagon meshes are
 kept in PostgreSQL with PostGIS. MapServer renders the map as WMS image tiles by
 calling a SQL function, and an nginx cache can sit in front of it. A small
 Express API serves everything apart from the tiles: the variable lists, the
@@ -65,7 +65,9 @@ PostGIS does most of the work. The schema is `demscore`, and its tables fall
 into three groups.
 
 **Indicator data.** `variables` and `dataset_values` hold the CSV exports in
-long format: one row per variable, year, country and value.
+long format: one row per variable, year, country and value. `datasets` records
+which identifier each dataset's countries are matched on: a Gleditsch-Ward code
+(UCDP), an ISO3 code (QoG, V-Dem) or the country name (REPDEM).
 `variable_metadata` adds human-readable titles, descriptions and citations
 taken from the codebook PDFs. `codebook_bibliography`, `codebook_citations` and
 `codebook_source_datasets` record who the data must be credited to.
@@ -78,7 +80,11 @@ taken from the codebook PDFs. `codebook_bibliography`, `codebook_citations` and
   polygons, mostly from CShapes and historical-basemaps. Each polygon carries
   its source, licence and a confidence grade.
 - `country_resolution_policy` decides which geometry each source country gets
-  for which years, or records why it is deliberately not drawn.
+  for which years, or records why it is deliberately not drawn. These decisions
+  are applied first; then each dataset is matched on its own identifier and
+  nothing else.
+- `gwcode_natural_earth` says which present-day country each Gleditsch-Ward
+  code stands for, since Natural Earth carries no such codes.
 
 **Hexagons.**
 - `hex_mesh` holds the hexagon grid for every supported size, computed in
@@ -116,7 +122,9 @@ bounding box.
 Each projection has two layers, which the client requests together. In Equal
 Earth they are `hex_variable` (the coloured hexagons) and `hex_outline` (a
 stroke around each area of equal colour). Countries with no value are drawn as
-grey hexagons.
+grey hexagons. Where two units cover the same ground in a year (a historical
+state and the present-day country beneath it, or a state and its successors in
+the year it broke up), the smaller is drawn on top.
 
 The colours are written once, in `webapp/src/core/palettes.js`.
 `scripts/build_hex_classes.mjs` generates MapServer's class styles from it

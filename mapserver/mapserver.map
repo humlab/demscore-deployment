@@ -62,11 +62,20 @@ MAP
     # this year is left to the data (demscore.hex_mesh_overlaps), so Germany in
     # 1850 is grey only where none of the German states it was is drawn.
     #
+    # Where two scored units hold the same cell in the same year, the smaller is
+    # drawn on top: the rows come out largest first (ORDER BY draw_area DESC) and
+    # MapServer paints them in that order. Most overlaps are a unit inside a
+    # larger one for the whole year -- the GDR in V-Dem's Germany, Zanzibar in
+    # Tanzania -- and some are a state and its successors in the year it broke up,
+    # UCDP's Soviet Union and the republics in 1991. Either way the smaller unit
+    # is the more specific claim about that ground, and drawn underneath it would
+    # not be seen at all; in 1991 the Soviet Union hid every republic.
+    #
     # Antarctica is the one present-day "country" left out. It is in no dataset
     # at all -- grey would say "not measured" of a place nobody measures -- and
     # drawn grey it was a band along the foot of the map wherever the window is
     # taller than the 60S crop.
-    DATA "geom FROM (WITH scores AS MATERIALIZED (SELECT * FROM demscore.country_scores('%dataset%','%variable%',%year%)) SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' IN ('positive', 'neutral') THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' IN ('positive', 'neutral') THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, hm.geom FROM demscore.hex_mesh hm JOIN scores cs ON cs.country_id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!) UNION ALL SELECT hm.id_key || '_' || hm.hex_n AS id, NULL::DOUBLE PRECISION AS value, 99 AS class_idx, NULL::INTEGER AS source_class_idx, NULL::DOUBLE PRECISION AS min_value, NULL::DOUBLE PRECISION AS max_value, hm.geom FROM demscore.hex_mesh hm JOIN demscore.countries c ON c.id = hm.country_id AND c.source = 'natural_earth' AND c.iso_a3 IS DISTINCT FROM 'ATA' WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!) AND NOT EXISTS (SELECT 1 FROM scores s WHERE s.country_id = hm.country_id) AND NOT EXISTS (SELECT 1 FROM demscore.hex_mesh_overlaps o JOIN scores s ON s.country_id = o.other_country_id WHERE o.country_id = hm.country_id AND o.hex_size_m = hm.hex_size_m AND o.hex_n = hm.hex_n)) AS hv USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (WITH scores AS MATERIALIZED (SELECT * FROM demscore.country_scores('%dataset%','%variable%',%year%)) SELECT hm.id_key || '_' || hm.hex_n AS id, cs.value, CASE WHEN '%palette%' = 'viridis' THEN (10 + cs.class_idx) WHEN '%palette%' = 'cividis' THEN (30 + cs.class_idx) WHEN '%palette%' = 'indigo_amber' THEN (20 + CASE WHEN '%polarity%' IN ('positive', 'neutral') THEN (8 - cs.class_idx) ELSE cs.class_idx END) WHEN '%polarity%' IN ('positive', 'neutral') THEN (8 - cs.class_idx) ELSE cs.class_idx END AS class_idx, cs.class_idx AS source_class_idx, cs.min_value, cs.max_value, c.area_m2 AS draw_area, c.id AS draw_id, hm.geom FROM demscore.hex_mesh hm JOIN scores cs ON cs.country_id = hm.country_id JOIN demscore.countries c ON c.id = hm.country_id WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!) UNION ALL SELECT hm.id_key || '_' || hm.hex_n AS id, NULL::DOUBLE PRECISION AS value, 99 AS class_idx, NULL::INTEGER AS source_class_idx, NULL::DOUBLE PRECISION AS min_value, NULL::DOUBLE PRECISION AS max_value, c.area_m2 AS draw_area, c.id AS draw_id, hm.geom FROM demscore.hex_mesh hm JOIN demscore.countries c ON c.id = hm.country_id AND c.source = 'natural_earth' AND c.adm0_a3 IS DISTINCT FROM 'ATA' WHERE hm.hex_size_m = %hex_size% AND ST_Intersects(hm.geom, !BOX!) AND NOT EXISTS (SELECT 1 FROM scores s WHERE s.country_id = hm.country_id) AND NOT EXISTS (SELECT 1 FROM demscore.hex_mesh_overlaps o JOIN scores s ON s.country_id = o.other_country_id WHERE o.country_id = hm.country_id AND o.hex_size_m = hm.hex_size_m AND o.hex_n = hm.hex_n) ORDER BY draw_area DESC, draw_id DESC) AS hv USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -75,7 +84,7 @@ MAP
     END
 
     VALIDATION
-      "dataset" "^(qog|repdem|v_dem)$"
+      "dataset" "^(qog|repdem|ucdp|v_dem)$"
       "variable" "^[A-Za-z0-9_]+$"
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
@@ -122,7 +131,12 @@ MAP
   #
   # Class, not value, decides whether two sides are the same colour, and only
   # colour does: two countries in the same class are one area with no stroke
-  # between them, and so is all the grey. A perimeter is an edge with rendered
+  # between them, and so is all the grey. Each side counts only the unit seen
+  # there, the smallest of those holding that cell, as in the fill layer: a
+  # republic drawn over the Soviet Union is outlined where its class differs
+  # from the Soviet one and is part of the same area where it does not. Counting
+  # every unit on a side stroked every edge inside an overlay of another class,
+  # and drew it as a honeycomb. A perimeter is an edge with rendered
   # hexagons on one side only -- the side, not a count of hexagons, since a
   # historical unit's cell lies on the present-day cell beneath it and a coast
   # there has two hexagons on it and still only sea on the other side.
@@ -136,7 +150,7 @@ MAP
       "init=epsg:8857"
     END
     CONNECTION "host=db port=5432 dbname=demscore user=demscore_reader"
-    DATA "geom FROM (WITH scored AS MATERIALIZED (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), scores AS MATERIALIZED (SELECT country_id, class_idx FROM scored UNION ALL SELECT c.id, 99 FROM demscore.countries c WHERE c.source = 'natural_earth' AND c.iso_a3 IS DISTINCT FROM 'ATA' AND NOT EXISTS (SELECT 1 FROM scored s WHERE s.country_id = c.id) AND NOT EXISTS (SELECT 1 FROM demscore.hex_mesh_overlaps o JOIN scored s ON s.country_id = o.other_country_id WHERE o.country_id = c.id AND o.hex_size_m = %hex_size%)), box_edges AS MATERIALIZED (SELECT be.id, be.geom FROM demscore.hex_border_edges be WHERE be.hex_size_m = %hex_size% AND ST_Intersects(be.geom, ST_Expand(!BOX!, %hex_size%))), drawn AS (SELECT e.geom FROM box_edges e JOIN demscore.hex_border_sides sd ON sd.edge_id = e.id JOIN scores sc ON sc.country_id = sd.country_id GROUP BY e.id, e.geom HAVING count(DISTINCT sd.on_left) = 1 OR min(sc.class_idx) <> max(sc.class_idx)) SELECT 1 AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 8857) AS geom FROM drawn HAVING count(*) > 0) AS ho USING UNIQUE id USING SRID=8857"
+    DATA "geom FROM (WITH scored AS MATERIALIZED (SELECT country_id, class_idx FROM demscore.country_scores('%dataset%','%variable%',%year%)), scores AS MATERIALIZED (SELECT country_id, class_idx FROM scored UNION ALL SELECT c.id, 99 FROM demscore.countries c WHERE c.source = 'natural_earth' AND c.adm0_a3 IS DISTINCT FROM 'ATA' AND NOT EXISTS (SELECT 1 FROM scored s WHERE s.country_id = c.id) AND NOT EXISTS (SELECT 1 FROM demscore.hex_mesh_overlaps o JOIN scored s ON s.country_id = o.other_country_id WHERE o.country_id = c.id AND o.hex_size_m = %hex_size%)), box_edges AS MATERIALIZED (SELECT be.id, be.geom FROM demscore.hex_border_edges be WHERE be.hex_size_m = %hex_size% AND ST_Intersects(be.geom, ST_Expand(!BOX!, %hex_size%))), visible AS (SELECT DISTINCT ON (e.id, sd.on_left) e.id, e.geom, sc.class_idx FROM box_edges e JOIN demscore.hex_border_sides sd ON sd.edge_id = e.id JOIN scores sc ON sc.country_id = sd.country_id JOIN demscore.countries c ON c.id = sd.country_id ORDER BY e.id, sd.on_left, c.area_m2, c.id), drawn AS (SELECT geom FROM visible GROUP BY id, geom HAVING count(*) = 1 OR min(class_idx) <> max(class_idx)) SELECT 1 AS id, ST_Multi(ST_LineMerge(ST_Collect(geom)))::geometry(MultiLineString, 8857) AS geom FROM drawn HAVING count(*) > 0) AS ho USING UNIQUE id USING SRID=8857"
     PROCESSING "CLOSE_CONNECTION=DEFER"
 
     METADATA
@@ -145,7 +159,7 @@ MAP
     END
 
     VALIDATION
-      "dataset" "^(qog|repdem|v_dem)$"
+      "dataset" "^(qog|repdem|ucdp|v_dem)$"
       "variable" "^[A-Za-z0-9_]+$"
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
@@ -199,7 +213,7 @@ MAP
     END
 
     VALIDATION
-      "dataset" "^(qog|repdem|v_dem)$"
+      "dataset" "^(qog|repdem|ucdp|v_dem)$"
       "variable" "^[A-Za-z0-9_]+$"
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"
@@ -235,7 +249,7 @@ MAP
     END
 
     VALIDATION
-      "dataset" "^(qog|repdem|v_dem)$"
+      "dataset" "^(qog|repdem|ucdp|v_dem)$"
       "variable" "^[A-Za-z0-9_]+$"
       "year" "^[0-9]{4}$"
       "hex_size" "^[0-9]{5,7}$"

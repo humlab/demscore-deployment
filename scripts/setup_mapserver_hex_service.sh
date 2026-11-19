@@ -235,7 +235,11 @@ GROUP BY v.dataset, v.variable, dv.year
 ORDER BY v.dataset, count(*) DESC, dv.year DESC, v.variable;")"
 
 echo "Validating map function outputs..."
-for dataset in qog repdem v_dem; do
+# Every dataset the load registered, not a list written here: a dataset added to
+# the loader is tested without anyone remembering this loop.
+loaded_datasets="$(podman compose exec -T db psql -U "$PG_USER" -d "$PG_DB" -v ON_ERROR_STOP=1 -At -c \
+  "SELECT dataset FROM demscore.datasets ORDER BY 1;")"
+for dataset in $loaded_datasets; do
   if ! grep -q "^${dataset}|" <<<"$smoke_cases"; then
     echo "${dataset} has no value on any country the map can draw, so there is nothing to test it with." >&2
     exit 1

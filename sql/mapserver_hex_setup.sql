@@ -55,6 +55,17 @@ DROP TABLE IF EXISTS demscore.dataset_value_unmapped_audit;
 CREATE TABLE demscore.countries (
   id BIGSERIAL PRIMARY KEY,
   name TEXT,
+  -- Natural Earth's own country code (ADM0_A3). The ISO code for most countries,
+  -- Natural Earth's own where the two differ or there is no ISO code: SDS for
+  -- South Sudan (ISO SSD), PSX for Palestine (PSE), KOS for Kosovo, SOL for
+  -- Somaliland. It identifies a present-day row; the policy table and
+  -- demscore.gwcode_natural_earth name countries by it.
+  adm0_a3 TEXT,
+  -- The ISO 3166-1 alpha-3 code, or NULL where the country has none. What a
+  -- dataset matched on ISO3 is matched against, and what /api/map-data shows
+  -- readers as the country's ISO3. Holding ADM0_A3 under this name once showed
+  -- readers SDS for South Sudan and left QoG's and V-Dem's South Sudan matched
+  -- only by name.
   iso_a3 TEXT,
   iso_a2 TEXT,
   id_key TEXT NOT NULL,
@@ -76,7 +87,11 @@ CREATE TABLE demscore.countries (
   geometry_confidence TEXT NOT NULL DEFAULT 'high'
     CHECK (geometry_confidence IN ('high', 'medium', 'low')),
   geom_4326 geometry(MultiPolygon, 4326) NOT NULL,
-  geom_8857 geometry(MultiPolygon, 8857) NOT NULL
+  geom_8857 geometry(MultiPolygon, 8857) NOT NULL,
+  -- The outline's area in square metres; Equal Earth is equal-area, so this is
+  -- the real area. Where two units hold the same hexagon in the same year, the
+  -- smaller is drawn on top (see the hex_variable and hex_outline layers).
+  area_m2 DOUBLE PRECISION
 );
 
 -- Country identity (name, codes) comes from demscore.countries_src, the Natural
@@ -88,7 +103,7 @@ CREATE TABLE demscore.countries (
 -- territory an ocean away -- while every country keeps the name and codes the
 -- indicator data is matched against.
 INSERT INTO demscore.countries
-  (name, iso_a3, iso_a2, id_key, source, source_key, geom_4326, geom_8857)
+  (name, adm0_a3, iso_a3, iso_a2, id_key, source, source_key, geom_4326, geom_8857)
 WITH units AS (
   SELECT
     NULLIF(NULLIF(adm0_a3, ''), '-99') AS adm0_a3,
@@ -122,7 +137,15 @@ WITH units AS (
 ), c AS (
   SELECT
     COALESCE(NULLIF(src.name_long, ''), src.name) AS name,
-    NULLIF(NULLIF(src.adm0_a3, ''), '-99') AS iso_a3,
+    NULLIF(NULLIF(src.adm0_a3, ''), '-99') AS adm0_a3,
+    -- ISO_A3 is -99 for France and Norway, whose ISO codes Natural Earth moves
+    -- to ISO_A3_EH because of their overseas parts. ISO_A3_EH alone would not
+    -- do either: it gives Australia's code to the Ashmore and Cartier Islands.
+    -- So ISO_A3, and ISO_A3_EH only where it is the country's own ADM0_A3.
+    COALESCE(
+      NULLIF(NULLIF(src.iso_a3, ''), '-99'),
+      CASE WHEN src.iso_a3_eh = src.adm0_a3 THEN src.iso_a3_eh END
+    ) AS iso_a3,
     NULLIF(NULLIF(src.iso_a2, ''), '-99') AS iso_a2,
     -- Fall back to the untrimmed outline if the map-units layer has no geometry
     -- for this country, so a mismatch between the two layers drops no country.
@@ -137,11 +160,12 @@ WITH units AS (
 )
 SELECT
   c.name,
+  c.adm0_a3,
   c.iso_a3,
   c.iso_a2,
-  COALESCE(c.iso_a3, lower(c.name)) AS id_key,
+  COALESCE(c.adm0_a3, lower(c.name)) AS id_key,
   'natural_earth' AS source,
-  'natural_earth:' || COALESCE(c.iso_a3, lower(c.name)) AS source_key,
+  'natural_earth:' || COALESCE(c.adm0_a3, lower(c.name)) AS source_key,
   c.geom_4326,
   -- No latitude clip. The old one cut every outline at +/-85.05112878 because
   -- that is where Web Mercator stops being able to represent the world at all;
@@ -245,6 +269,9 @@ WHERE NOT ST_IsEmpty(
   )
 );
 
+UPDATE demscore.countries SET area_m2 = ST_Area(geom_8857);
+
+CREATE INDEX countries_adm0_a3_idx ON demscore.countries (adm0_a3);
 CREATE INDEX countries_iso_a3_idx ON demscore.countries (iso_a3);
 CREATE INDEX countries_name_lc_idx ON demscore.countries (lower(name));
 CREATE INDEX countries_source_idx ON demscore.countries (source);
@@ -257,13 +284,23 @@ CREATE INDEX countries_geom_8857_gix ON demscore.countries USING GIST (geom_8857
 UPDATE demscore.dataset_values
 SET country_id = NULL;
 
--- Matching runs policy first, then the two direct matches.
+-- Matching runs the resolution policy first, then exactly one direct match per
+-- dataset: the identifier demscore.datasets declares it is matched on.
 --
 -- The order is the point. demscore.country_resolution_policy is a decision
 -- somebody wrote down; an ISO3 that happens to equal a Natural Earth code is an
 -- accident of two code lists agreeing. When they disagree the written decision
 -- has to win, or a policy row narrowing an entity to part of its span would be
 -- quietly overtaken by a direct match on the rest.
+--
+-- And one direct match, not a cascade. A row the dataset's own identifier does
+-- not place is unmatched, and setup fails on it, rather than being placed by a
+-- second identifier that nobody chose: falling back to the name once placed V-Dem's
+-- Kosovo and Somaliland without anyone deciding it. The identifiers a dataset
+-- was not matched on still feed demscore.country_match_disagreements below.
+--
+-- demscore.policy_covers() (sql/historical_geometry.sql) is the one statement of
+-- when a policy row applies to an observation.
 
 -- Pass 1: policy rows pointing at a present-day Natural Earth country.
 WITH matches AS (
@@ -273,16 +310,12 @@ WITH matches AS (
   FROM demscore.dataset_values dv
   JOIN demscore.variables v ON v.id = dv.variable_id
   JOIN demscore.country_resolution_policy p
-    ON p.dataset = v.dataset
-   AND p.status = 'natural_earth'
-   AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
-   AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
-   AND (p.from_year IS NULL OR dv.year >= p.from_year)
-   AND (p.to_year IS NULL OR dv.year <= p.to_year)
+    ON p.status = 'natural_earth'
+   AND demscore.policy_covers(p, v.dataset, dv.iso3, dv.country_name, dv.gwcode, dv.year)
   JOIN demscore.countries c
     ON c.source = 'natural_earth'
    AND (
-     (p.target_iso3 IS NOT NULL AND c.iso_a3 IS NOT NULL AND upper(c.iso_a3) = upper(p.target_iso3))
+     (p.target_adm0_a3 IS NOT NULL AND upper(c.adm0_a3) = upper(p.target_adm0_a3))
      OR
      (p.target_name IS NOT NULL AND lower(c.name) = lower(p.target_name))
    )
@@ -302,12 +335,8 @@ WITH matches AS (
   FROM demscore.dataset_values dv
   JOIN demscore.variables v ON v.id = dv.variable_id
   JOIN demscore.country_resolution_policy p
-    ON p.dataset = v.dataset
-   AND p.status = 'cshapes'
-   AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
-   AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
-   AND (p.from_year IS NULL OR dv.year >= p.from_year)
-   AND (p.to_year IS NULL OR dv.year <= p.to_year)
+    ON p.status = 'cshapes'
+   AND demscore.policy_covers(p, v.dataset, dv.iso3, dv.country_name, dv.gwcode, dv.year)
   JOIN demscore.countries c
     ON c.source = 'cshapes'
    AND c.gwcode = p.target_gwcode
@@ -337,12 +366,8 @@ WITH matches AS (
   FROM demscore.dataset_values dv
   JOIN demscore.variables v ON v.id = dv.variable_id
   JOIN demscore.country_resolution_policy p
-    ON p.dataset = v.dataset
-   AND p.status = 'historical_registry'
-   AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
-   AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
-   AND (p.from_year IS NULL OR dv.year >= p.from_year)
-   AND (p.to_year IS NULL OR dv.year <= p.to_year)
+    ON p.status = 'historical_registry'
+   AND demscore.policy_covers(p, v.dataset, dv.iso3, dv.country_name, dv.gwcode, dv.year)
   JOIN demscore.countries c
     ON c.source = 'historical_registry'
    AND c.registry_key = p.target_registry_key
@@ -354,28 +379,50 @@ SET country_id = m.country_id
 FROM matches m
 WHERE dv.id = m.dataset_value_id;
 
--- Pass 4: the source's own ISO3 against a present-day country code.
+-- Pass 4, for datasets matched on Gleditsch-Ward codes: the code's present-day
+-- country. The years a code spent on an outline that has since changed are
+-- policy rows, and have been matched above.
 UPDATE demscore.dataset_values dv
 SET country_id = c.id
-FROM demscore.countries c
+FROM demscore.variables v, demscore.datasets d,
+     demscore.gwcode_natural_earth g, demscore.countries c
 WHERE dv.country_id IS NULL
+  AND v.id = dv.variable_id
+  AND d.dataset = v.dataset
+  AND d.country_key = 'gwcode'
+  AND g.gwcode = dv.gwcode
+  AND c.source = 'natural_earth'
+  AND c.adm0_a3 = g.adm0_a3;
+
+-- Pass 4, for datasets matched on ISO3: the source's ISO code against the
+-- country's.
+UPDATE demscore.dataset_values dv
+SET country_id = c.id
+FROM demscore.variables v, demscore.datasets d, demscore.countries c
+WHERE dv.country_id IS NULL
+  AND v.id = dv.variable_id
+  AND d.dataset = v.dataset
+  AND d.country_key = 'iso3'
   AND dv.iso3 IS NOT NULL
   AND c.source = 'natural_earth'
   AND upper(c.iso_a3) = upper(dv.iso3);
 
--- Pass 5: the source's own country name against a present-day country name.
+-- Pass 4, for datasets matched on name: the source's country name against the
+-- country's.
 UPDATE demscore.dataset_values dv
 SET country_id = c.id
-FROM demscore.countries c
+FROM demscore.variables v, demscore.datasets d, demscore.countries c
 WHERE dv.country_id IS NULL
+  AND v.id = dv.variable_id
+  AND d.dataset = v.dataset
+  AND d.country_key = 'name'
   AND dv.country_name IS NOT NULL
   AND c.source = 'natural_earth'
   AND lower(c.name) = lower(dv.country_name);
 
 -- An `intentionally_unsupported` policy row is a refusal, so it has to be able
 -- to overrule a later match as well as the absence of one. Nothing in the
--- current policy set reaches this -- South Yemen before 1967 has no ISO3 or
--- name Natural Earth answers to -- but a refusal that only worked while no
+-- current policy set reaches this, but a refusal that only worked while no
 -- other pass happened to match would be a decision the next source revision
 -- could undo without anybody noticing.
 UPDATE demscore.dataset_values dv
@@ -383,12 +430,8 @@ SET country_id = NULL
 FROM demscore.variables v, demscore.country_resolution_policy p
 WHERE v.id = dv.variable_id
   AND dv.country_id IS NOT NULL
-  AND p.dataset = v.dataset
   AND p.status = 'intentionally_unsupported'
-  AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
-  AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
-  AND (p.from_year IS NULL OR dv.year >= p.from_year)
-  AND (p.to_year IS NULL OR dv.year <= p.to_year);
+  AND demscore.policy_covers(p, v.dataset, dv.iso3, dv.country_name, dv.gwcode, dv.year);
 
 -- Every matching pass has now run against every dataset_values row, so a
 -- historical period nothing points to can never be reached: country_scores()
@@ -426,6 +469,7 @@ CREATE TABLE demscore.dataset_value_unmapped_audit (
   year INTEGER NOT NULL,
   iso3 TEXT,
   country_name TEXT,
+  gwcode INTEGER,
   value_count BIGINT NOT NULL,
   min_value DOUBLE PRECISION,
   max_value DOUBLE PRECISION,
@@ -438,7 +482,7 @@ CREATE TABLE demscore.dataset_value_unmapped_audit (
 );
 
 INSERT INTO demscore.dataset_value_unmapped_audit
-  (dataset, variable, year, iso3, country_name, value_count, min_value, max_value,
+  (dataset, variable, year, iso3, country_name, gwcode, value_count, min_value, max_value,
    resolution_status, reason)
 SELECT
   v.dataset,
@@ -446,6 +490,7 @@ SELECT
   dv.year,
   dv.iso3,
   dv.country_name,
+  dv.gwcode,
   count(*) AS value_count,
   min(dv.value) AS min_value,
   max(dv.value) AS max_value,
@@ -466,33 +511,98 @@ JOIN demscore.variables v ON v.id = dv.variable_id
 LEFT JOIN LATERAL (
   SELECT p.reason
   FROM demscore.country_resolution_policy p
-  WHERE p.dataset = v.dataset
-    AND p.status = 'intentionally_unsupported'
-    AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
-    AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
-    AND (p.from_year IS NULL OR dv.year >= p.from_year)
-    AND (p.to_year IS NULL OR dv.year <= p.to_year)
+  WHERE p.status = 'intentionally_unsupported'
+    AND demscore.policy_covers(p, v.dataset, dv.iso3, dv.country_name, dv.gwcode, dv.year)
   ORDER BY p.id
   LIMIT 1
 ) unsupported ON TRUE
 LEFT JOIN LATERAL (
   SELECT TRUE AS exists_any
   FROM demscore.country_resolution_policy p
-  WHERE p.dataset = v.dataset
-    AND (p.source_iso3 IS NULL OR (dv.iso3 IS NOT NULL AND upper(p.source_iso3) = upper(dv.iso3)))
-    AND (p.source_name IS NULL OR (dv.country_name IS NOT NULL AND lower(p.source_name) = lower(dv.country_name)))
+  WHERE demscore.policy_covers(p, v.dataset, dv.iso3, dv.country_name, dv.gwcode, NULL)
   LIMIT 1
 ) matched_policy ON TRUE
 WHERE dv.country_id IS NULL
-GROUP BY v.dataset, v.variable, dv.year, dv.iso3, dv.country_name,
+GROUP BY v.dataset, v.variable, dv.year, dv.iso3, dv.country_name, dv.gwcode,
          unsupported.reason, matched_policy.exists_any;
 
 CREATE INDEX dataset_value_unmapped_audit_dataset_idx
   ON demscore.dataset_value_unmapped_audit (dataset);
 CREATE INDEX dataset_value_unmapped_audit_country_idx
-  ON demscore.dataset_value_unmapped_audit (dataset, iso3, country_name);
+  ON demscore.dataset_value_unmapped_audit (dataset, iso3, country_name, gwcode);
 CREATE INDEX dataset_value_unmapped_audit_status_idx
   ON demscore.dataset_value_unmapped_audit (resolution_status);
+
+-- Where the identifiers a dataset was not matched on would have placed a country
+-- differently.
+--
+-- A dataset is matched on one identifier (demscore.datasets), but most carry a
+-- name as well, and some an ISO3 beside a code. Each one it was not matched on
+-- is a second opinion, and this table records every case where that opinion
+-- names a different country than the one the observation was drawn on. Two
+-- kinds turn up:
+--   decided_by_policy = TRUE   a written decision overrode it on purpose. UCDP's
+--                              "Germany" in 1989 is West Germany, though its name
+--                              says present-day Germany. Expected; listed so the
+--                              decision is visible.
+--   decided_by_policy = FALSE  the dataset's own identifier and another one
+--                              disagree, and nobody decided which is right. Worth
+--                              a look: one of the two is wrong, or a table is.
+-- A second identifier that names no country at all (UCDP's "DR Congo (Zaire)"
+-- matches no Natural Earth name) is not a disagreement and is not listed.
+-- scripts/import_data.sh puts this table in the import summary.
+DROP TABLE IF EXISTS demscore.country_match_disagreements;
+CREATE TABLE demscore.country_match_disagreements AS
+WITH entity_years AS (
+  SELECT DISTINCT v.dataset, dv.iso3, dv.country_name, dv.gwcode, dv.year, dv.country_id
+  FROM demscore.dataset_values dv
+  JOIN demscore.variables v ON v.id = dv.variable_id
+  WHERE dv.country_id IS NOT NULL
+), opinions AS (
+  SELECT ey.*, 'name'::TEXT AS other_key, alt.id AS other_country_id
+  FROM entity_years ey
+  JOIN demscore.datasets d ON d.dataset = ey.dataset AND d.country_key <> 'name'
+  JOIN demscore.countries alt
+    ON alt.source = 'natural_earth' AND lower(alt.name) = lower(ey.country_name)
+  UNION ALL
+  SELECT ey.*, 'iso3', alt.id
+  FROM entity_years ey
+  JOIN demscore.datasets d ON d.dataset = ey.dataset AND d.country_key <> 'iso3'
+  JOIN demscore.countries alt
+    ON alt.source = 'natural_earth' AND upper(alt.iso_a3) = upper(ey.iso3)
+  UNION ALL
+  SELECT ey.*, 'gwcode', alt.id
+  FROM entity_years ey
+  JOIN demscore.datasets d ON d.dataset = ey.dataset AND d.country_key <> 'gwcode'
+  JOIN demscore.gwcode_natural_earth g ON g.gwcode = ey.gwcode
+  JOIN demscore.countries alt
+    ON alt.source = 'natural_earth' AND alt.adm0_a3 = g.adm0_a3
+)
+SELECT
+  o.dataset,
+  d.country_key,
+  o.iso3,
+  o.country_name,
+  o.gwcode,
+  min(o.year) AS from_year,
+  max(o.year) AS to_year,
+  count(*) AS year_count,
+  matched.name AS drawn_as,
+  matched.source AS drawn_as_source,
+  o.other_key,
+  other.name AS other_key_says,
+  bool_or(EXISTS (
+    SELECT 1 FROM demscore.country_resolution_policy p
+    WHERE demscore.policy_covers(p, o.dataset, o.iso3, o.country_name, o.gwcode, o.year)
+  )) AS decided_by_policy
+FROM opinions o
+JOIN demscore.datasets d ON d.dataset = o.dataset
+JOIN demscore.countries matched ON matched.id = o.country_id
+JOIN demscore.countries other ON other.id = o.other_country_id
+WHERE o.other_country_id <> o.country_id
+GROUP BY o.dataset, d.country_key, o.iso3, o.country_name, o.gwcode,
+         matched.name, matched.source, o.other_key, other.name
+ORDER BY o.dataset, o.country_name, min(o.year);
 
 ANALYZE demscore.dataset_values;
 ANALYZE demscore.dataset_value_unmapped_audit;
@@ -1077,6 +1187,18 @@ ANALYZE demscore.hex_border_edges;
 ANALYZE demscore.hex_border_sides;
 ANALYZE demscore.hex_mesh_overlaps;
 
+-- Every country on the map for one variable-year, with its value and colour
+-- class. The one source of what the map shows: the WMS layers, /api/map-data,
+-- /api/class-breaks and the spoken summary all read it.
+--
+-- class_idx 1-7 ranks the year's distinct values into seven classes, the same
+-- way for every dataset. A value shared by many countries takes one rank, so
+-- UCDP's 0 -- most of the world in most years -- is simply the bottom of the
+-- lowest class (0-19 deaths in 2024). That is also what 0 is in UCDP: no deaths
+-- above its inclusion threshold, not proof that nothing happened.
+--
+-- An unknown dataset falls back to V-Dem rather than to an empty result, as it
+-- always has; the mapfile and the backend validate the name before it gets here.
 CREATE OR REPLACE FUNCTION demscore.country_scores(
   p_dataset TEXT DEFAULT 'v_dem',
   p_variable TEXT DEFAULT 'v2x_polyarchy',
@@ -1097,12 +1219,10 @@ STABLE
 AS $$
 WITH normalized AS (
   SELECT
-    CASE lower(p_dataset)
-      WHEN 'qog' THEN 'qog'
-      WHEN 'repdem' THEN 'repdem'
-      WHEN 'v_dem' THEN 'v_dem'
-      ELSE 'v_dem'
-    END AS dataset,
+    COALESCE(
+      (SELECT d.dataset FROM demscore.datasets d WHERE d.dataset = lower(p_dataset)),
+      'v_dem'
+    ) AS dataset,
     p_variable AS variable,
     GREATEST(1500, LEAST(2100, p_year)) AS year
 ), country_values AS (
@@ -1176,6 +1296,9 @@ $$;
 -- on an 1815 snapshot and a value drawn on a present-day border are both just
 -- coloured hexagons in the WMS image, and a reader deserves to be told which
 -- they are looking at.
+-- Dropped first: CREATE OR REPLACE cannot change a function's result columns,
+-- and source_gwcode was added to them.
+DROP FUNCTION IF EXISTS demscore.source_coverage(TEXT, TEXT, INTEGER);
 CREATE OR REPLACE FUNCTION demscore.source_coverage(
   p_dataset TEXT DEFAULT 'v_dem',
   p_variable TEXT DEFAULT 'v2x_polyarchy',
@@ -1184,6 +1307,7 @@ CREATE OR REPLACE FUNCTION demscore.source_coverage(
 RETURNS TABLE (
   source_name TEXT,
   source_iso3 TEXT,
+  source_gwcode INTEGER,
   value DOUBLE PRECISION,
   map_status TEXT,
   map_country_name TEXT,
@@ -1196,12 +1320,10 @@ STABLE
 AS $$
 WITH normalized AS (
   SELECT
-    CASE lower(p_dataset)
-      WHEN 'qog' THEN 'qog'
-      WHEN 'repdem' THEN 'repdem'
-      WHEN 'v_dem' THEN 'v_dem'
-      ELSE 'v_dem'
-    END AS dataset,
+    COALESCE(
+      (SELECT d.dataset FROM demscore.datasets d WHERE d.dataset = lower(p_dataset)),
+      'v_dem'
+    ) AS dataset,
     p_variable AS variable,
     GREATEST(1500, LEAST(2100, p_year)) AS year
 ), source_rows AS (
@@ -1211,6 +1333,7 @@ WITH normalized AS (
   SELECT
     COALESCE(dv.country_name, dv.iso3) AS source_name,
     dv.iso3 AS source_iso3,
+    dv.gwcode AS source_gwcode,
     dv.country_id,
     AVG(dv.value)::DOUBLE PRECISION AS value
   FROM demscore.dataset_values dv
@@ -1219,11 +1342,12 @@ WITH normalized AS (
     ON v.dataset = n.dataset
    AND v.variable = n.variable
    AND dv.year = n.year
-  GROUP BY 1, 2, 3
+  GROUP BY 1, 2, 3, 4
 )
 SELECT
   sr.source_name,
   sr.source_iso3,
+  sr.source_gwcode,
   sr.value,
   CASE
     WHEN sr.country_id IS NOT NULL THEN 'mapped'
@@ -1241,12 +1365,8 @@ LEFT JOIN LATERAL (
   SELECT p.reason
   FROM demscore.country_resolution_policy p
   WHERE sr.country_id IS NULL
-    AND p.dataset = n.dataset
     AND p.status = 'intentionally_unsupported'
-    AND (p.source_iso3 IS NULL OR (sr.source_iso3 IS NOT NULL AND upper(p.source_iso3) = upper(sr.source_iso3)))
-    AND (p.source_name IS NULL OR (sr.source_name IS NOT NULL AND lower(p.source_name) = lower(sr.source_name)))
-    AND (p.from_year IS NULL OR n.year >= p.from_year)
-    AND (p.to_year IS NULL OR n.year <= p.to_year)
+    AND demscore.policy_covers(p, n.dataset, sr.source_iso3, sr.source_name, sr.source_gwcode, n.year)
   ORDER BY p.id
   LIMIT 1
 ) unsupported ON TRUE;

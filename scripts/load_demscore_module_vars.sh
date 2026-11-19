@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 BASE_DIR="${ROOT_DIR}/data/Demscore_Module_Vars"
-DATASETS=("QoG" "REPDEM" "V-Dem")
+DATASETS=("QoG" "REPDEM" "UCDP" "V-Dem")
 
 # Demscore writes -11111 wherever an observation is lost in the translation to the
 # requested unit of analysis ("missing due to the translation/merge", REPDEM
@@ -75,13 +75,32 @@ DROP TABLE IF EXISTS demscore.variable_metadata_raw;
 
 DROP TABLE IF EXISTS demscore.dataset_values;
 DROP TABLE IF EXISTS demscore.variables;
+DROP TABLE IF EXISTS demscore.datasets;
 DROP TABLE IF EXISTS demscore.qog CASCADE;
 DROP TABLE IF EXISTS demscore.repdem CASCADE;
 DROP TABLE IF EXISTS demscore.v_dem CASCADE;
 
+-- How each dataset is matched to the map, declared in this script's dataset
+-- settings below rather than read from the export: the codebooks do not say
+-- which code system an identifier column holds, and two that look alike
+-- (Gleditsch-Ward and Correlates of War) disagree exactly where countries split
+-- and merge. sql/mapserver_hex_setup.sql matches a dataset on its
+-- `country_key` and nothing else, after the resolution policy:
+--   gwcode  Gleditsch-Ward code, through demscore.gwcode_natural_earth
+--   iso3    ISO 3166-1 alpha-3 code, against Natural Earth's ISO code
+--   name    country name, against Natural Earth's name
+-- The order of preference, when a dataset carries more than one, is the order
+-- above. The identifiers it was not matched on are still loaded, and map setup
+-- reports where they would have placed a country differently.
+CREATE TABLE demscore.datasets (
+  dataset TEXT PRIMARY KEY,
+  country_key TEXT NOT NULL CHECK (country_key IN ('gwcode', 'iso3', 'name')),
+  country_key_column TEXT NOT NULL
+);
+
 CREATE TABLE demscore.variables (
   id BIGSERIAL PRIMARY KEY,
-  dataset TEXT NOT NULL,
+  dataset TEXT NOT NULL REFERENCES demscore.datasets(dataset),
   variable TEXT NOT NULL,
   -- Kept in the database and renderable by direct WMS request, but left out of the
   -- variable list the web client offers. See the superseded-variant step below.
@@ -95,6 +114,7 @@ CREATE TABLE demscore.dataset_values (
   year INTEGER NOT NULL,
   iso3 TEXT,
   country_name TEXT,
+  gwcode INTEGER,
   value DOUBLE PRECISION NOT NULL,
   country_id BIGINT
 );
@@ -156,21 +176,41 @@ SQL
       exit 1
     fi
 
+    # Each dataset's identifier columns, and which one it is matched on
+    # (country_key; see demscore.datasets above). A column is named here only
+    # once its code system has been checked against the source project's own
+    # documentation: the Demscore codebooks do not say, and describe some of
+    # these columns wrongly. QoG's
+    # ccodecow and V-Dem's cowcode are Correlates of War codes, not
+    # Gleditsch-Ward, and are deliberately not used. scripts/import_data_report.py
+    # holds a copy of this table for its preflight check and must agree with it.
+    gw_col=""
     case "$dataset" in
       "QoG")
         dataset_key="qog"
+        country_key="iso3"
         iso_col="u_qog_country_year_ccodealp"
         country_col="u_qog_country_year_country"
         year_col="u_qog_country_year_year"
         ;;
       "REPDEM")
         dataset_key="repdem"
+        country_key="name"
         iso_col=""
         country_col="u_repdem_country_year_country"
         year_col="u_repdem_country_year_year"
         ;;
+      "UCDP")
+        dataset_key="ucdp"
+        country_key="gwcode"
+        iso_col=""
+        gw_col="u_ucdp_orgv_country_year_country_id"
+        country_col="u_ucdp_orgv_country_year_country"
+        year_col="u_ucdp_orgv_country_year_year"
+        ;;
       "V-Dem")
         dataset_key="v_dem"
+        country_key="iso3"
         iso_col="u_vdem_country_year_country_text_id"
         country_col="u_vdem_country_year_country"
         year_col="u_vdem_country_year_year"
@@ -210,7 +250,13 @@ SQL
       fi
     done
 
-    for required_col in "$country_col" "$year_col" ${iso_col:+"$iso_col"}; do
+    case "$country_key" in
+      gwcode) country_key_col="$gw_col" ;;
+      iso3) country_key_col="$iso_col" ;;
+      name) country_key_col="$country_col" ;;
+    esac
+
+    for required_col in "$country_col" "$year_col" ${iso_col:+"$iso_col"} ${gw_col:+"$gw_col"}; do
       if [[ ! " ${excluded_cols[*]} " == *" ${required_col} "* ]]; then
         echo "Column ${required_col} is missing from ${csv_path}" >&2
         exit 1
@@ -226,6 +272,11 @@ SQL
     else
       iso_expr="NULL::TEXT"
     fi
+    if [[ -n "$gw_col" ]]; then
+      gw_expr="CASE WHEN TRIM(s.\"${gw_col}\") ~ '^[0-9]{1,4}\$' THEN TRIM(s.\"${gw_col}\")::INT ELSE NULL END"
+    else
+      gw_expr="NULL::INT"
+    fi
 
     exclude_sql=""
     for ec in "${excluded_cols[@]}"; do
@@ -237,6 +288,9 @@ SQL
     done
 
     cat <<SQL
+INSERT INTO demscore.datasets (dataset, country_key, country_key_column)
+VALUES ('${dataset_key}', '${country_key}', '${country_key_col}');
+
 -- What the export holds, before anything is filtered out of it.
 INSERT INTO demscore.import_source_report (
   dataset, csv_rows, csv_columns, identifier_columns, rows_without_year,
@@ -259,6 +313,7 @@ CREATE TEMP TABLE import_cells AS
 SELECT
   ${iso_expr} AS iso3,
   NULLIF(TRIM(s."${country_col}"), '') AS country_name,
+  ${gw_expr} AS gwcode,
   ${year_expr} AS year,
   kv.key AS variable,
   c.raw_value,
@@ -297,12 +352,13 @@ WHERE text_cells = 0
 ORDER BY variable
 ON CONFLICT (dataset, variable) DO NOTHING;
 
-INSERT INTO demscore.dataset_values (variable_id, year, iso3, country_name, value, country_id)
+INSERT INTO demscore.dataset_values (variable_id, year, iso3, country_name, gwcode, value, country_id)
 SELECT
   v.id,
   c.year,
   c.iso3,
   c.country_name,
+  c.gwcode,
   c.value,
   NULL
 FROM import_cells c
@@ -375,6 +431,7 @@ CREATE INDEX dataset_values_var_year_idx ON demscore.dataset_values (variable_id
 CREATE INDEX dataset_values_country_var_year_idx ON demscore.dataset_values (country_id, variable_id, year);
 CREATE INDEX dataset_values_iso3_idx ON demscore.dataset_values (iso3);
 CREATE INDEX dataset_values_country_name_lc_idx ON demscore.dataset_values (lower(country_name));
+CREATE INDEX dataset_values_gwcode_idx ON demscore.dataset_values (gwcode);
 
 ANALYZE demscore.variables;
 ANALYZE demscore.dataset_values;
@@ -555,6 +612,7 @@ BEGIN
 END
 $$;
 
+ANALYZE demscore.datasets;
 ANALYZE demscore.variables;
 ANALYZE demscore.dataset_values;
 ANALYZE demscore.import_column_report;
