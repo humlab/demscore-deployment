@@ -54,6 +54,7 @@ $$;
 DROP TABLE IF EXISTS demscore.historical_country_geometries_src CASCADE;
 DROP TABLE IF EXISTS demscore.country_resolution_policy CASCADE;
 DROP TABLE IF EXISTS demscore.gwcode_natural_earth CASCADE;
+DROP TABLE IF EXISTS demscore.gw_year_changes CASCADE;
 -- The table the policy table replaces. Dropped so a redeploy over a database
 -- built before this file leaves nothing behind that still looks authoritative.
 DROP TABLE IF EXISTS demscore.country_aliases CASCADE;
@@ -957,6 +958,99 @@ INSERT INTO demscore.gwcode_natural_earth (gwcode, adm0_a3, label) VALUES
   (990, 'WSM', 'Samoa (Western Samoa)'           );  -- by hand
 
 ANALYZE demscore.gwcode_natural_earth;
+
+-- The changes of state that fall inside a year, for the datasets whose units are
+-- Gleditsch-Ward states (demscore.datasets.country_key = 'gwcode': UCDP). The
+-- map draws one picture per year, so in a year a state begins, ends or breaks
+-- up, two rows may cover the same ground for different parts of it -- the
+-- Soviet Union until each republic begins, the republic after. The map draws
+-- the smaller on top; /api/map-data gives each row these changes, and the table
+-- view notes that the row may cover only part of the year. It states no date:
+-- the dates here are CShapes', and whether UCDP splits a year at them is
+-- unconfirmed.
+--
+--   from   this state begins on change_date; before it, its ground is in
+--          other_gwcode's row
+--   until  this state ends on change_date; after it, its ground is in
+--          other_gwcode's row
+--   loses  other_gwcode begins on change_date on part of this state's ground
+--   gains  other_gwcode's ground joins this state on change_date
+--
+-- Dates are CShapes 2.0's (gwsdate/gwedate), which follow the Gleditsch-Ward
+-- list, and every UCDP successor's first year is the year given here. Whether
+-- UCDP splits a year's events at exactly these dates is not confirmed. Kept by
+-- hand rather than derived from CShapes' periods: CShapes shrinks the Soviet
+-- outline on 1 and 21 December 1991 but starts Ukraine, Armenia, Azerbaijan and
+-- Kazakhstan on the 26th, and renumbers Serbia 340 in 2006 where UCDP keeps 345,
+-- so matching periods end to start drops half the cases. Only changes inside a
+-- year are listed: Czechoslovakia's split on 1 January 1993 is not one.
+CREATE TABLE demscore.gw_year_changes (
+  gwcode INTEGER NOT NULL,
+  change_date DATE NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('from', 'until', 'loses', 'gains')),
+  other_gwcode INTEGER NOT NULL,
+  -- The other state's name as the note will read it ("the Soviet Union").
+  other_label TEXT NOT NULL,
+  PRIMARY KEY (gwcode, change_date, kind, other_gwcode)
+);
+
+INSERT INTO demscore.gw_year_changes (gwcode, change_date, kind, other_gwcode, other_label) VALUES
+  -- Yemen and Germany: one state ends and its ground joins another's
+  (680, DATE '1990-05-21', 'until', 678, 'Yemen'),
+  (678, DATE '1990-05-22', 'gains', 680, 'South Yemen'),
+  (265, DATE '1990-10-02', 'until', 260, 'Germany'),
+  (260, DATE '1990-10-03', 'gains', 265, 'the German Democratic Republic'),
+  -- the Soviet Union's successors
+  (359, DATE '1991-08-25', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-08-25', 'loses', 359, 'Moldova'),
+  (370, DATE '1991-08-25', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-08-25', 'loses', 370, 'Belarus'),
+  (703, DATE '1991-09-01', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-09-01', 'loses', 703, 'Kyrgyzstan'),
+  (704, DATE '1991-09-01', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-09-01', 'loses', 704, 'Uzbekistan'),
+  (366, DATE '1991-09-06', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-09-06', 'loses', 366, 'Estonia'),
+  (367, DATE '1991-09-06', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-09-06', 'loses', 367, 'Latvia'),
+  (368, DATE '1991-09-06', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-09-06', 'loses', 368, 'Lithuania'),
+  (372, DATE '1991-09-06', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-09-06', 'loses', 372, 'Georgia'),
+  (702, DATE '1991-09-06', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-09-06', 'loses', 702, 'Tajikistan'),
+  (701, DATE '1991-10-27', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-10-27', 'loses', 701, 'Turkmenistan'),
+  (369, DATE '1991-12-26', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-12-26', 'loses', 369, 'Ukraine'),
+  (371, DATE '1991-12-26', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-12-26', 'loses', 371, 'Armenia'),
+  (373, DATE '1991-12-26', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-12-26', 'loses', 373, 'Azerbaijan'),
+  (705, DATE '1991-12-26', 'from',  365, 'the Soviet Union'),
+  (365, DATE '1991-12-26', 'loses', 705, 'Kazakhstan'),
+  -- Yugoslavia's; UCDP keeps 345 for Serbia throughout, where CShapes renumbers it 340 in 2006
+  (343, DATE '1991-11-20', 'from',  345, 'Yugoslavia'),
+  (345, DATE '1991-11-20', 'loses', 343, 'North Macedonia'),
+  (344, DATE '1992-04-27', 'from',  345, 'Yugoslavia'),
+  (345, DATE '1992-04-27', 'loses', 344, 'Croatia'),
+  (346, DATE '1992-04-27', 'from',  345, 'Yugoslavia'),
+  (345, DATE '1992-04-27', 'loses', 346, 'Bosnia-Herzegovina'),
+  (349, DATE '1992-04-27', 'from',  345, 'Yugoslavia'),
+  (345, DATE '1992-04-27', 'loses', 349, 'Slovenia'),
+  (341, DATE '2006-06-12', 'from',  345, 'Serbia'),
+  (345, DATE '2006-06-12', 'loses', 341, 'Montenegro'),
+  (347, DATE '2008-02-20', 'from',  345, 'Serbia'),
+  (345, DATE '2008-02-20', 'loses', 347, 'Kosovo'),
+  -- and the rest
+  (531, DATE '1993-05-24', 'from',  530, 'Ethiopia'),
+  (530, DATE '1993-05-24', 'loses', 531, 'Eritrea'),
+  (860, DATE '2002-05-20', 'from',  850, 'Indonesia'),
+  (850, DATE '2002-05-20', 'loses', 860, 'East Timor'),
+  (626, DATE '2011-07-09', 'from',  625, 'Sudan'),
+  (625, DATE '2011-07-09', 'loses', 626, 'South Sudan');
+
+ANALYZE demscore.gw_year_changes;
 
 -- ---------------------------------------------------------------------------
 -- 3. Integrity of the tables against each other and their sources

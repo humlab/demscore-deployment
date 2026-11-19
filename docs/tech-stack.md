@@ -122,7 +122,9 @@ bounding box.
 Each projection has two layers, which the client requests together. In Equal
 Earth they are `hex_variable` (the coloured hexagons) and `hex_outline` (a
 stroke around each area of equal colour). Countries with no value are drawn as
-grey hexagons.
+grey hexagons. Where two units cover the same ground in a year (a historical
+state and the present-day country beneath it, or a state and its successors in
+the year it broke up), the smaller is drawn on top.
 
 The colours are written once, in `webapp/src/core/palettes.js`.
 `scripts/build_hex_classes.mjs` generates MapServer's class styles from it

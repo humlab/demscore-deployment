@@ -87,7 +87,11 @@ CREATE TABLE demscore.countries (
   geometry_confidence TEXT NOT NULL DEFAULT 'high'
     CHECK (geometry_confidence IN ('high', 'medium', 'low')),
   geom_4326 geometry(MultiPolygon, 4326) NOT NULL,
-  geom_8857 geometry(MultiPolygon, 8857) NOT NULL
+  geom_8857 geometry(MultiPolygon, 8857) NOT NULL,
+  -- The outline's area in square metres; Equal Earth is equal-area, so this is
+  -- the real area. Where two units hold the same hexagon in the same year, the
+  -- smaller is drawn on top (see the hex_variable and hex_outline layers).
+  area_m2 DOUBLE PRECISION
 );
 
 -- Country identity (name, codes) comes from demscore.countries_src, the Natural
@@ -264,6 +268,8 @@ WHERE NOT ST_IsEmpty(
     3
   )
 );
+
+UPDATE demscore.countries SET area_m2 = ST_Area(geom_8857);
 
 CREATE INDEX countries_adm0_a3_idx ON demscore.countries (adm0_a3);
 CREATE INDEX countries_iso_a3_idx ON demscore.countries (iso_a3);

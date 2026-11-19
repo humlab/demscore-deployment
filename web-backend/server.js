@@ -561,6 +561,19 @@ async function getMapData(dataset, variable, year) {
     `WITH scores AS (
        SELECT *
        FROM demscore.country_scores($1, $2, $3)
+     ), row_gwcodes AS (
+       -- Which Gleditsch-Ward state each drawn row is, for a dataset whose
+       -- units are those states (UCDP). Other datasets code units of their
+       -- own -- V-Dem has colonial Nigeria before 1960 -- so a state's dates
+       -- say nothing about which part of the year their row may cover.
+       SELECT DISTINCT dv.country_id, dv.gwcode
+       FROM demscore.dataset_values dv
+       JOIN demscore.variables v ON v.id = dv.variable_id
+       JOIN demscore.datasets d ON d.dataset = v.dataset AND d.country_key = 'gwcode'
+       WHERE v.dataset = lower($1)
+         AND v.variable = $2
+         AND dv.year = $3
+         AND dv.gwcode IS NOT NULL
      )
      SELECT
        c.name AS country,
@@ -571,10 +584,26 @@ async function getMapData(dataset, variable, year) {
        c.valid_from_year,
        c.valid_to_year,
        c.geometry_source_dataset,
-       c.geometry_confidence
+       c.geometry_confidence,
+       changes.year_changes
      FROM demscore.countries c
      LEFT JOIN scores cs
        ON cs.country_id = c.id
+     LEFT JOIN LATERAL (
+       SELECT json_agg(
+                json_build_object(
+                  'kind', g.kind,
+                  'date', to_char(g.change_date, 'YYYY-MM-DD'),
+                  'other', g.other_label
+                )
+                ORDER BY g.change_date, g.other_label
+              ) AS year_changes
+       FROM row_gwcodes rg
+       JOIN demscore.gw_year_changes g
+         ON g.gwcode = rg.gwcode
+        AND extract(year FROM g.change_date) = $3
+       WHERE rg.country_id = c.id
+     ) changes ON cs.country_id IS NOT NULL
      WHERE c.source = 'natural_earth'
         OR cs.country_id IS NOT NULL
      ORDER BY c.name, c.valid_from_year NULLS LAST;`,
@@ -594,6 +623,12 @@ async function getMapData(dataset, variable, year) {
     // so the row carries it even though the map cannot.
     geometrySource: row.geometry_source_dataset,
     geometryConfidence: row.geometry_confidence,
+    // In a year a state begins, ends or breaks up, what changed:
+    // [{ kind: "from" | "until" | "loses" | "gains", date, other }], from
+    // demscore.gw_year_changes. Empty for every other row. The client says only
+    // that the row may cover part of the year: the dates are CShapes', and
+    // whether UCDP splits a year at them is unconfirmed.
+    yearChanges: Array.isArray(row.year_changes) ? row.year_changes : [],
   }));
 }
 
