@@ -39,9 +39,7 @@ V-Dem) into a thematic global hex map.
      Correlates of War codes, which look like Gleditsch-Ward codes and differ exactly where
      countries merged and split. `scripts/import_data_report.py preflight` fails an export
      whose key column holds anything not of the declared form
-   - `demscore.variables` (`dataset`, `variable`, `hidden`, `zero_means_none`). The last is
-     set per dataset in the loader (UCDP: every variable is a count of deaths or conflicts)
-     and gives a value of 0 a class of its own; see "Zero is a class" in step 6
+   - `demscore.variables` (`dataset`, `variable`, `hidden`)
    - `demscore.dataset_values` (`variable_id`, `year`, `iso3`, `country_name`, `gwcode`, `value`, `country_id`)
    - `demscore.import_source_report` (one row per dataset: rows, columns, years, countries)
      and `demscore.import_column_report` (one row per CSV column, with its `outcome`:
@@ -217,11 +215,12 @@ V-Dem) into a thematic global hex map.
    left to the data, and a no-data country any of whose cells is overlaid this year is left out
    of the outline's sides altogether, or the overlaid area would be stroked as a honeycomb; both
    read `demscore.hex_mesh_overlaps`. The area outline is 1.0px (it was 1.6).
-   **Zero is a class.** For a variable with `zero_means_none` (UCDP's counts), class 1 in
-   `demscore.country_scores()` is exactly 0 and the year's non-zero values are ranked into
-   classes 2-7, so the bluest colour means "none" and the legend's hover on it reads "0".
-   Ranked with the rest, 0 shared the lowest class with whatever small values fell beside it:
-   in 2024, 0 active conflicts with 1, which drew Ukraine and Sudan like a country at peace.
+   **Classes divide distinct values.** `demscore.country_scores()` ranks the year's distinct
+   values into seven classes, the same for every dataset, so a value many countries share
+   takes one rank. UCDP's 0, most of the world in most years, is the bottom of the lowest
+   class (0-19 deaths in 2024) rather than a class of its own: UCDP's codebook says a 0 means
+   no deaths above its inclusion threshold (a dyad counts only once it has reached 25 deaths
+   in a calendar year), not that nothing happened.
 7. `scripts/build_variable_coverage.sh` precomputes `webapp/config/variable_coverage.json`:
    - reads per-variable, per-year country counts once
    - buckets each variable across its own first-to-last year (~40 bars, one per year where

@@ -105,12 +105,6 @@ CREATE TABLE demscore.variables (
   -- Kept in the database and renderable by direct WMS request, but left out of the
   -- variable list the web client offers. See the superseded-variant step below.
   hidden BOOLEAN NOT NULL DEFAULT FALSE,
-  -- Whether a value of 0 means "none of this happened" rather than the bottom of
-  -- a scale. demscore.country_scores() gives those countries a class of their own
-  -- instead of ranking them with the rest: UCDP's death counts are 0 for two
-  -- thirds of the world in a typical year, and ranked, 0 shared the lowest colour
-  -- with up to 25 deaths. Set per dataset in its settings below.
-  zero_means_none BOOLEAN NOT NULL DEFAULT FALSE,
   UNIQUE (dataset, variable)
 );
 
@@ -191,7 +185,6 @@ SQL
     # Gleditsch-Ward, and are deliberately not used. scripts/import_data_report.py
     # holds a copy of this table for its preflight check and must agree with it.
     gw_col=""
-    zero_means_none="FALSE"
     case "$dataset" in
       "QoG")
         dataset_key="qog"
@@ -214,8 +207,6 @@ SQL
         gw_col="u_ucdp_orgv_country_year_country_id"
         country_col="u_ucdp_orgv_country_year_country"
         year_col="u_ucdp_orgv_country_year_year"
-        # Every UCDP indicator is a count of deaths or of active conflicts.
-        zero_means_none="TRUE"
         ;;
       "V-Dem")
         dataset_key="v_dem"
@@ -353,8 +344,8 @@ SELECT
 FROM import_cells
 GROUP BY variable;
 
-INSERT INTO demscore.variables (dataset, variable, zero_means_none)
-SELECT '${dataset_key}', variable, ${zero_means_none}
+INSERT INTO demscore.variables (dataset, variable)
+SELECT '${dataset_key}', variable
 FROM import_column_stats
 WHERE text_cells = 0
   AND usable_cells > 0

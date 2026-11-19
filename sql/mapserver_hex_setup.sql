@@ -1185,12 +1185,11 @@ ANALYZE demscore.hex_mesh_overlaps;
 -- class. The one source of what the map shows: the WMS layers, /api/map-data,
 -- /api/class-breaks and the spoken summary all read it.
 --
--- class_idx 1-7 ranks the year's distinct values into seven classes. For a
--- variable whose 0 means nothing happened (demscore.variables.zero_means_none,
--- UCDP's counts), class 1 is exactly 0 and the year's non-zero values are ranked
--- into classes 2-7. Ranked with the rest, 0 shared the lowest class with whatever
--- small values fell beside it: 0 active conflicts with 1, which drew Ukraine and
--- Sudan in 2024 in the same colour as a country at peace.
+-- class_idx 1-7 ranks the year's distinct values into seven classes, the same
+-- way for every dataset. A value shared by many countries takes one rank, so
+-- UCDP's 0 -- most of the world in most years -- is simply the bottom of the
+-- lowest class (0-19 deaths in 2024). That is also what 0 is in UCDP: no deaths
+-- above its inclusion threshold, not proof that nothing happened.
 --
 -- An unknown dataset falls back to V-Dem rather than to an empty result, as it
 -- always has; the mapfile and the backend validate the name before it gets here.
@@ -1220,37 +1219,25 @@ WITH normalized AS (
     ) AS dataset,
     p_variable AS variable,
     GREATEST(1500, LEAST(2100, p_year)) AS year
-), selected_variable AS (
-  SELECT v.id, v.zero_means_none
-  FROM demscore.variables v
-  JOIN normalized n
-    ON v.dataset = n.dataset
-   AND v.variable = n.variable
 ), country_values AS (
   SELECT
     dv.country_id,
-    AVG(dv.value)::DOUBLE PRECISION AS value,
-    bool_and(sv.zero_means_none AND dv.value = 0) AS is_none
+    AVG(dv.value)::DOUBLE PRECISION AS value
   FROM demscore.dataset_values dv
-  JOIN selected_variable sv
-    ON sv.id = dv.variable_id
+  JOIN demscore.variables v
+    ON v.id = dv.variable_id
   JOIN normalized n
-    ON dv.year = n.year
+    ON v.dataset = n.dataset
+   AND v.variable = n.variable
+   AND dv.year = n.year
   WHERE dv.country_id IS NOT NULL
   GROUP BY dv.country_id
 ), distinct_values AS (
   SELECT DISTINCT value
   FROM country_values
-  WHERE NOT is_none
 ), class_plan AS (
-  -- A zero class takes the first of the seven, leaving six for the rest.
-  SELECT
-    LEAST(CASE WHEN sv.zero_means_none THEN 6 ELSE 7 END, count(dv.value)::INTEGER) AS class_count,
-    count(dv.value)::NUMERIC AS value_count,
-    CASE WHEN sv.zero_means_none THEN 1 ELSE 0 END AS class_offset
-  FROM selected_variable sv
-  LEFT JOIN distinct_values dv ON TRUE
-  GROUP BY sv.zero_means_none
+  SELECT LEAST(7, count(*)::INTEGER) AS class_count
+  FROM distinct_values
 ), ranked_values AS (
   SELECT
     value,
@@ -1261,16 +1248,16 @@ WITH normalized AS (
     cv.country_id,
     cv.value,
     CASE
-      WHEN cv.is_none THEN 1
       WHEN cp.class_count = 0 THEN NULL
       ELSE FLOOR(
-        (rv.value_rank - 1)::NUMERIC * cp.class_count / cp.value_count
-      )::INTEGER + 1 + cp.class_offset
+        (rv.value_rank - 1)::NUMERIC * cp.class_count
+        / (SELECT count(*)::NUMERIC FROM distinct_values)
+      )::INTEGER + 1
     END AS class_idx,
     min(cv.value) OVER () AS min_value,
     max(cv.value) OVER () AS max_value
   FROM country_values cv
-  LEFT JOIN ranked_values rv ON rv.value = cv.value AND NOT cv.is_none
+  JOIN ranked_values rv ON rv.value = cv.value
   CROSS JOIN class_plan cp
 )
 SELECT

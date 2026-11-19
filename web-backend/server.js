@@ -490,7 +490,7 @@ async function getVariableTopicsConfig() {
 }
 
 // The legend paints seven quantile classes; these are the value spans behind
-// them, plus class 0 ("none") for a variable whose 0 means nothing happened. Same source as the map -- demscore.country_scores() is what the WMS
+// them. Same source as the map -- demscore.country_scores() is what the WMS
 // layer classes on -- so the numbers the legend shows on hover are the numbers
 // the hexagons were coloured by, not a second, separately computed set.
 //
