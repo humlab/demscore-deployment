@@ -264,7 +264,7 @@ V-Dem) into a thematic global hex map.
   applied to the volume, with any collation change, by `scripts/upgrade_db_volume.sh` on
   the next start
 - Spatial server: MapServer 8.6 (`camptocamp/mapserver:8.6`)
-- Web server: Nginx 1.30 Alpine (`nginx:1.30-alpine`, the stable branch)
+- Web server: Nginx 1.30 Alpine (`nginx:1.30.7-alpine`, the stable branch, pinned to the patch release so a stale local `1.30-alpine` cannot keep serving a vulnerable build; 1.30.7 fixes CVE-2026-123633 and CVE-2026-123007)
 - Web backend: Node 24 + Express 4, built into `localhost/demscore-web-backend` from
   `web-backend/Containerfile` (`npm ci` from the lockfile at build time, runs as `node`)
 - Frontend: Vanilla JS + OpenLayers 10.10.0 + proj4 2.22.0 + static HTML/CSS
