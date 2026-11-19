@@ -4,7 +4,7 @@
 # so the two policies differ in nothing else here.
 services:
   router:
-    image: docker.io/library/nginx:1.30-alpine
+    image: docker.io/library/nginx:1.30.7-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-router
     depends_on:
       - web
@@ -100,7 +100,7 @@ services:
     restart: always
 
   web:
-    image: docker.io/library/nginx:1.30-alpine
+    image: docker.io/library/nginx:1.30.7-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-web
     depends_on:
       - mapserver
@@ -113,7 +113,7 @@ services:
     restart: always
 
   mapcache:
-    image: docker.io/library/nginx:1.30-alpine
+    image: docker.io/library/nginx:1.30.7-alpine
     container_name: ${DEMSCORE_CONTAINER_PREFIX:-demscore}-mapcache
     depends_on:
       - mapserver
