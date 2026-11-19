@@ -283,8 +283,16 @@ echo "Rebuilding the sources and licences the map credits..."
 "${ROOT_DIR}/scripts/build_attribution.sh"
 
 echo "Validating WMS GetCapabilities..."
-curl -sS "http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&REQUEST=GetCapabilities" \
-  | head -n 20
+# Fetched whole and then shown, not piped into head: under pipefail, head
+# closing the pipe after 20 lines kills curl with SIGPIPE while it is still
+# writing, and the script exits there without a word -- depending only on
+# timing, so it passed on one machine and failed a deploy on another.
+capabilities="$(curl -sS "http://127.0.0.1:${ROUTER_PORT}/mapserver?map=/etc/mapserver/mapserver.map&SERVICE=WMS&REQUEST=GetCapabilities")"
+printf '%s\n' "$capabilities" | sed -n '1,20p'
+case "$capabilities" in
+  *"<WMS_Capabilities"*) ;;
+  *) echo "GetCapabilities did not return a capabilities document." >&2; exit 1 ;;
+esac
 
 # Requested exactly the way the web app requests it -- WMS 1.1.1, SRS rather
 # than CRS, and the full Equal Earth world box -- so a mapfile that only renders
